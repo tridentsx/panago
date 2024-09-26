@@ -1,0 +1,63 @@
+project_name: myapp
+
+# Release settings
+release:
+  github:
+    owner: your-github-username  # Replace with your GitHub username
+    name: myapp                  # Replace with your repository name
+  draft: true                     # Keep the release as a draft for review
+
+# Build settings
+builds:
+  - id: myapp
+    main: ./main.go               # Path to the main Go file
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags: "-s -w"              # Strip debug info for smaller binaries
+    binary: myapp                 # Name of the output binary
+    env:
+      - CGO_ENABLED=0             # Disable CGO for easier cross-compilation
+    hooks:
+      pre:                        # Optional: Run tasks before the build
+        - go mod tidy
+
+# Archive settings: Generate .tar.gz and .zip files for different OSes
+archives:
+  - format_overrides:
+      - goos: windows
+        format: zip               # Use .zip for Windows binaries
+    files:
+      - LICENSE
+      - README.md                 # Include additional files in the archive
+
+# Artifacts
+artifacts:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    path: dist/{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+# Checksums: Generate SHA256 checksums for the binaries
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+  algorithm: sha256
+
+# Sign artifacts (Optional)
+signs:
+  - artifacts: checksum
+
+# Docker (Optional)
+dockers:
+  - image_templates:
+      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
+
+# Snapshot release settings for testing without creating a full GitHub release
+snapshot:
+  name_template: "{{ .Tag }}-SNAPSHOT"
+
+# Changelog
+changelog:
+  use: github                        # Auto-generate changelogs from GitHub commits
