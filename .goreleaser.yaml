@@ -1,15 +1,15 @@
-project_name: myapp
+project_name: panago
 
 # Release settings
 release:
   github:
-    owner: your-github-username  # Replace with your GitHub username
-    name: myapp                  # Replace with your repository name
+    owner: tridentsx  # Replace with your GitHub username
+    name: panago                  # Replace with your repository name
   draft: true                     # Keep the release as a draft for review
 
 # Build settings
 builds:
-  - id: myapp
+  - id: panago
     main: ./main.go               # Path to the main Go file
     goos:
       - linux
@@ -19,7 +19,7 @@ builds:
       - amd64
       - arm64
     ldflags: "-s -w"              # Strip debug info for smaller binaries
-    binary: myapp                 # Name of the output binary
+    binary: panago                 # Name of the output binary
     env:
       - CGO_ENABLED=0             # Disable CGO for easier cross-compilation
     hooks:
@@ -50,9 +50,9 @@ signs:
   - artifacts: checksum
 
 # Docker (Optional)
-dockers:
-  - image_templates:
-      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
+# dockers:
+#  - image_templates:
+#      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
 
 # Snapshot release settings for testing without creating a full GitHub release
 snapshot:
