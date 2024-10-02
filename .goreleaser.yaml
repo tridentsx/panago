@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 project_name: panago
+=======
+project_name: panago 
+>>>>>>> d37452e (first working local build)
 
 # Release settings
 release:
@@ -35,22 +39,21 @@ archives:
       - LICENSE
       - README.md                 # Include additional files in the archive
 
-# Artifacts
-artifacts:
-  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    path: dist/{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-
 # Checksums: Generate SHA256 checksums for the binaries
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"
   algorithm: sha256
 
 # Sign artifacts (Optional)
-signs:
-  - artifacts: checksum
+#signs:
+#  - artifacts: checksum
 
 # Docker (Optional)
+<<<<<<< HEAD
 # dockers:
+=======
+#dockers:
+>>>>>>> d37452e (first working local build)
 #  - image_templates:
 #      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
 
@@ -61,3 +64,4 @@ snapshot:
 # Changelog
 changelog:
   use: github                        # Auto-generate changelogs from GitHub commits
+
