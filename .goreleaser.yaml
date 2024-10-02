@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 project_name: panago
-=======
-project_name: panago 
->>>>>>> d37452e (first working local build)
 
 # Release settings
 release:
@@ -49,11 +45,7 @@ checksum:
 #  - artifacts: checksum
 
 # Docker (Optional)
-<<<<<<< HEAD
-# dockers:
-=======
 #dockers:
->>>>>>> d37452e (first working local build)
 #  - image_templates:
 #      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
 
@@ -64,4 +56,3 @@ snapshot:
 # Changelog
 changelog:
   use: github                        # Auto-generate changelogs from GitHub commits
-
