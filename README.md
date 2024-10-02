@@ -1,2 +1,2 @@
 # panago
-Go binary exploiting panasonic player to enable fixing  bugs
+Golang code to explore and research panasonic bluray player
