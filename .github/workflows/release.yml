@@ -1,0 +1,36 @@
+name: Release with GoReleaser
+
+# Trigger workflow on tag creation (e.g., v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Matches tags like v1.0.0, v1.2.3, etc.
+  workflow_dispatch:  # Allows manually triggering the workflow
+
+jobs:
+  release:
+    name: Release Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Go
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.21  # Replace with your preferred Go version
+
+      # Step 3: Install GoReleaser
+      - name: Install GoReleaser
+        run: |
+          curl -sL https://install.goreleaser.com/github.com/goreleaser/goreleaser.sh | bash
+
+      # Step 4: Run GoReleaser
+      - name: Run GoReleaser
+        run: goreleaser release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
