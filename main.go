@@ -56,8 +56,9 @@ func sendFirstPayload(ip string) error {
 
 func sendSecondPayload(ip string) error {
 	// The second payload string that sends the magic key for punch authentication
-	secondPayload := "\x9f\xbe\x9b\x17\x3b\x18\xee\x01\x82\xea\x35\x9f\xa7\x60\x12\x4c\n\0\0\0\0\0\n\n"
-
+	secondPayload := "\x9f\xbe\x9b\x17\x3b\x18\xee\x01\x82\xea\x35\x9f\xa7\x60\x12\x4c"
+	//\n\0\0\0\0\0\n\n"
+	
 	// Connect to the IP on port 2222 (where punch binary is listening)
 	conn, err := net.Dial("tcp", ip+":2222")
 	if err != nil {
