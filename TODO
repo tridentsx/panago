@@ -1,0 +1,7 @@
+Refactor main, its getting to large split it up in internal functions and import
+Add string litterals for the here douments to create backups of eeprom and nand
+Change the formatting for the payloads so they easier to understand
+Create a shell script to create a new drive.img file with custom content
+Reasearch tools to write the drive.img file from multi OS remove that part from tool add to documentation
+Create options to main for pawning player vs patching player
+ 
