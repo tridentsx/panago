@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// Rewrite
 func IsPort2222Open(ip string) bool {
 	address := fmt.Sprintf("%s:%d", ip, 2222)
 	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
@@ -14,7 +13,6 @@ func IsPort2222Open(ip string) bool {
 		return false
 	}
 	conn.Close()
-	fmt.Println("player already pawned")
 	return true
 }
 
@@ -26,7 +24,6 @@ func IsPlayerAvailable(ip string) bool {
 	}
 	defer conn.Close()
 
-	//getRequest := "GET /dial_srv/apps/hello HTTP/1.1\r\nHost: " + ip + ":60030\r\nConnection: close\r\n\r\n"
 	_, err = conn.Write([]byte(getRequestStart + ip + getRequestEnd))
 	if err != nil {
 		return false
