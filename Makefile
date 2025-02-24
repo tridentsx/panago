@@ -1,0 +1,50 @@
+SHELL := /bin/bash
+
+BINARY_DIR := bin
+DISKUTIL_BINARY := $(BINARY_DIR)/diskutil
+PANAGO_BINARY  := $(BINARY_DIR)/panago
+
+.PHONY: all build build-diskutil build-panago clean test fmt lint
+
+all: build
+
+## Build all binaries
+build: build-diskutil build-panago
+
+## Build the diskutil binary
+build-diskutil:
+	@echo "Building diskutil..."
+	@mkdir -p $(BINARY_DIR)
+	# If cmd/diskutil has its own go.mod
+	#cd cmd/diskutil && go build -o ../../$(DISKUTIL_BINARY)
+	# If using the root go.mod only, you can do:
+	go build -o $(DISKUTIL_BINARY) ./cmd/diskutil
+
+## Build the panago binary
+build-panago:
+	@echo "Building panago..."
+	@mkdir -p $(BINARY_DIR)
+	# If cmd/panago has its own go.mod
+	# cd cmd/panago && go build -o ../../$(PANAGO_BINARY)
+	# If using the root go.mod only, you can do:
+	go build -o $(PANAGO_BINARY) ./cmd/panago
+
+## Remove built artifacts
+clean:
+	@echo "Cleaning..."
+	rm -rf $(BINARY_DIR)
+
+## Run all tests in the module
+test:
+	@echo "Running tests..."
+	go test -v ./...
+
+## Format all Go code
+fmt:
+	@echo "Formatting code..."
+	go fmt ./...
+
+## Lint the code (requires golangci-lint or another lint tool installed)
+lint:
+	@echo "Linting code..."
+	golangci-lint run
