@@ -9,6 +9,9 @@ import (
 	"github.com/tridentsx/panago/internal"
 )
 
+// This variable will be set at build time using -ldflags
+var version string = "dev" // Default value if not set during build
+
 func main() {
 	// Ensure IP address is passed as an argument
 	if len(os.Args) != 2 {
