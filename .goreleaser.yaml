@@ -1,18 +1,7 @@
-version: 2
-
-project_name: panago
-
-# Release settings
-release:
-  github:
-    owner: tridentsx  # Replace with your GitHub username
-    name: panago                  # Replace with your repository name
-  draft: true                     # Keep the release as a draft for review
-
-# Build settings
+# .goreleaser.yaml
 builds:
-  - id: panago
-    main: ./main.go               # Path to the main Go file
+  - binary: diskutil
+    main: ./cmd/diskutil
     goos:
       - linux
       - windows
@@ -20,37 +9,23 @@ builds:
     goarch:
       - amd64
       - arm64
-    ldflags: "-s -w"              # Strip debug info for smaller binaries
-    binary: panago                 # Name of the output binary
-    env:
-      - CGO_ENABLED=0             # Disable CGO for easier cross-compilation
-    hooks:
-      pre:                        # Optional: Run tasks before the build
-        - go mod tidy
 
-# Archive settings: Generate .tar.gz and .zip files for different OSes
+  - binary: panago
+    main: ./cmd/panago
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+# Example: specify how archives (zip/tar) are produced
 archives:
-  - format_overrides:
-      - goos: windows
-        format: zip               # Use .zip for Windows binaries
-    files:
-      - LICENSE
-      - README.md                 # Include additional files in the archive
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .OS }}_{{ .Arch }}"
+  - format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .OS }}_{{ .Arch }}"
 
-# Checksums: Generate SHA256 checksums for the binaries
-checksum:
-  name_template: "{{ .ProjectName }}_checksums.txt"
-  algorithm: sha256
-
-# Sign artifacts (Optional)
-#signs:
-#  - artifacts: checksum
-
-# Docker (Optional)
-#dockers:
-#  - image_templates:
-#      - "your-docker-repo/myapp:{{ .Tag }}"  # If you want to build Docker images
-
-# Changelog
-changelog:
-  use: github                        # Auto-generate changelogs from GitHub commits
+# Optionally define extra release notes, builds, etc.
+# See https://goreleaser.com/customization/ for full config options.

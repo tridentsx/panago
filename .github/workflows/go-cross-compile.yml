@@ -25,16 +25,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.21  # Specify the Go version you want to use
+          go-version: 1.21  # Use your preferred Go version
           cache: true
 
-      - name: Compile binary
+      - name: Compile binaries
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o dist/myapp-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Build diskutil
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -o dist/diskutil-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/diskutil
+          
+          # Build panago
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -o dist/panago-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/panago
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: binaries
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
