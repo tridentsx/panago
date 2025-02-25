@@ -3,13 +3,14 @@ SHELL := /bin/bash
 BINARY_DIR := bin
 DISKUTIL_BINARY := $(BINARY_DIR)/diskutil
 PANAGO_BINARY  := $(BINARY_DIR)/panago
+CRAMFS_BINARY  := $(BINARY_DIR)/cramfs
 
 .PHONY: all build build-diskutil build-panago clean test fmt lint
 
 all: build
 
 ## Build all binaries
-build: build-diskutil build-panago build-patches
+build: build-diskutil build-panago build-patches build-cramfs
 
 ## Build the diskutil binary
 build-diskutil:
@@ -25,9 +26,20 @@ build-panago:
 	# If using the root go.mod only, you can do:
 	go build -o $(PANAGO_BINARY) ./cmd/panago
 
+## Build the panago binary
+build-cramfs:
+	@echo "Building cramfs..."
+	@mkdir -p $(BINARY_DIR)
+	# If using the root go.mod only, you can do:
+	go build -o $(CRAMFS_BINARY) ./cmd/cramfs
+
 build-patches:
 	@echo "Putting patches in bin folder..."
 	cp -r patches bin/patches
+
+build-scripts:
+	@echo "Putting patches in bin folder..."
+	cp -r scripts bin/scripts
 
 ## Remove built artifacts
 clean:
