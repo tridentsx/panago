@@ -46,29 +46,29 @@ func main() {
 
 	// Declare ipForm before using it
 	ipForm := tview.NewForm().
-		AddInputField("IP Address", "", 20, nil, nil)
-	AddButton("Connect", func() {
-		ipAddr := ipForm.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
-		if ipAddr == "" {
-			showModal(app, "Error", "IP Address cannot be empty.", func() {
-				app.SetRoot(ipForm, true)
-			})
-			return
-		}
+		AddInputField("IP Address", "", 20, nil, nil).
+		AddButton("Connect", func() {
+			ipAddr := ipForm.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
+			if ipAddr == "" {
+				showModal(app, "Error", "IP Address cannot be empty.", func() {
+					app.SetRoot(ipForm, true)
+				})
+				return
+			}
 
-		// Try to run the exploit logic:
-		err := runExploitLogic(app, ipAddr)
-		if err != nil {
-			showModal(app, "Error", err.Error(), func() {
-				// On modal dismiss, return to the IP form
-				app.SetRoot(ipForm, true)
-			})
-			return
-		}
+			// Try to run the exploit logic:
+			err := runExploitLogic(app, ipAddr)
+			if err != nil {
+				showModal(app, "Error", err.Error(), func() {
+					// On modal dismiss, return to the IP form
+					app.SetRoot(ipForm, true)
+				})
+				return
+			}
 
-		// If success, show main menu
-		showMainMenu(app, ipAddr)
-	}).
+			// If success, show main menu
+			showMainMenu(app, ipAddr)
+		}).
 		AddButton("Quit", func() {
 			app.Stop()
 		})
