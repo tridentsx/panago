@@ -9,14 +9,12 @@ PANAGO_BINARY  := $(BINARY_DIR)/panago
 all: build
 
 ## Build all binaries
-build: build-diskutil build-panago
+build: build-diskutil build-panago build-patches
 
 ## Build the diskutil binary
 build-diskutil:
 	@echo "Building diskutil..."
 	@mkdir -p $(BINARY_DIR)
-	# If cmd/diskutil has its own go.mod
-	#cd cmd/diskutil && go build -o ../../$(DISKUTIL_BINARY)
 	# If using the root go.mod only, you can do:
 	go build -o $(DISKUTIL_BINARY) ./cmd/diskutil
 
@@ -24,10 +22,12 @@ build-diskutil:
 build-panago:
 	@echo "Building panago..."
 	@mkdir -p $(BINARY_DIR)
-	# If cmd/panago has its own go.mod
-	# cd cmd/panago && go build -o ../../$(PANAGO_BINARY)
 	# If using the root go.mod only, you can do:
 	go build -o $(PANAGO_BINARY) ./cmd/panago
+
+build-patches:
+	@echo "Putting patches in bin folder..."
+	cp -r patches bin/patches
 
 ## Remove built artifacts
 clean:
