@@ -8,7 +8,6 @@ import (
 	"os"
 )
 
-// ReadSuperblock reads and validates the Cramfs superblock
 func ReadSuperblock(file *os.File, cfg *Config) (*Superblock, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
@@ -17,9 +16,23 @@ func ReadSuperblock(file *os.File, cfg *Config) (*Superblock, error) {
 	if err := binary.Read(file, cfg.Endianness, &sb); err != nil {
 		return nil, err
 	}
+
+	// Validate Magic Number
 	if sb.Magic != 0x28cd3d45 {
 		return nil, errors.New("invalid Cramfs magic number")
 	}
+
+	// Convert byte arrays to strings
+	signature := string(sb.Signature[:])
+	name := string(sb.Name[:])
+
+	fmt.Printf("Cramfs Filesystem Detected:\n")
+	fmt.Printf("  Name: %s\n", name)
+	fmt.Printf("  Size: %d bytes\n", sb.Size)
+	fmt.Printf("  Blocks: %d\n", sb.Blocks)
+	fmt.Printf("  Files: %d\n", sb.Files)
+	fmt.Printf("  Signature: %s\n", signature)
+
 	return &sb, nil
 }
 
@@ -39,16 +52,15 @@ func ListFiles(imagePath string, cfg *Config) error {
 	}
 	defer file.Close()
 
-	var sb Superblock
-	if err := binary.Read(file, cfg.Endianness, &sb); err != nil {
+	// Call ReadSuperblock to read and validate the superblock
+	sb, err := ReadSuperblock(file, cfg)
+	if err != nil {
 		return err
 	}
 
-	if sb.Magic != 0x28cd3d45 {
-		return errors.New("invalid Cramfs magic number")
-	}
-
+	// Display additional debugging info
 	fmt.Printf("Listing files in Cramfs image: %s\n", imagePath)
+	fmt.Printf("Filesystem Size: %d bytes, Blocks: %d, Files: %d\n", sb.Size, sb.Blocks, sb.Files)
 
 	// Read inodes
 	for {
