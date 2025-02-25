@@ -96,7 +96,7 @@ func CompressToCramfs(rootDir string, outputFile string, cfg *Config) error {
 
 	// Update superblock size and checksum
 	sb.Size = fileOffset
-	sb.Checksum = crc.Sum32()
+	sb.FSCRC = crc.Sum32()
 	if _, err := outputFileHandle.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
