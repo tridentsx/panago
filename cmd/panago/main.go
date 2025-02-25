@@ -44,17 +44,18 @@ func findPatchFolders() map[string]string {
 func main() {
 	app := tview.NewApplication()
 
-	// Declare ipForm before using it
-	ipForm := tview.NewForm().
-		AddInputField("IP Address", "", 20, nil, nil)
-	AddButton("Connect", func() {
-		ipAddr := ipForm.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
-		if ipAddr == "" {
-			showModal(app, "Error", "IP Address cannot be empty.", func() {
-				app.SetRoot(ipForm, true)
-			})
-			return
-		}
+	// Create and configure the IP form
+	var ipForm *tview.Form
+	ipForm = tview.NewForm().
+		AddInputField("IP Address", "", 20, nil, nil).
+		AddButton("Connect", func() {
+			ipAddr := ipForm.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
+			if ipAddr == "" {
+				showModal(app, "Error", "IP Address cannot be empty.", func() {
+					app.SetRoot(ipForm, true)
+				})
+				return
+			}
 
 		// Try to run the exploit logic:
 		err := runExploitLogic(app, ipAddr)
@@ -87,7 +88,7 @@ func main() {
 }
 
 // runExploitLogic checks ports 60030 & 2222, and sends the two payloads.
-func runExploitLogic(app *tview.Application, ipAddress string) error {
+func runExploitLogic(_app *tview.Application, ipAddress string) error {
 	// Check if anything is listening on port 2222 first
 	if internal.IsPort2222Open(ipAddress) {
 		return fmt.Errorf("player at %s is already pawned on port 2222", ipAddress)
@@ -119,28 +120,30 @@ func runExploitLogic(app *tview.Application, ipAddress string) error {
 	return nil
 }
 
+// Global menu variable to ensure proper scope in closures
+var mainMenu *tview.List
+
 // showMainMenu creates a TUI menu to choose between Backup, Patch, or Quit.
-func showMainMenu(app *tview.Application, ipAddr string) {
-	// Declare menu before using it
-	menu := tview.NewList().
-		AddItem("Backup Player", "", 'b', func() {
-			showModal(app, "Backup", "Backup completed successfully!", func() {
-				// Return to main menu
-				app.SetRoot(menu, true)
-			})
-		}).
-		AddItem("Patch Player", "", 'p', func() {
-			showPatchMenu(app, menu)
-		}).
-		AddItem("Quit", "", 'q', func() {
-			app.Stop()
+func showMainMenu(app *tview.Application, _ipAddr string) {
+	mainMenu = tview.NewList()
+	mainMenu.AddItem("Backup Player", "", 'b', func() {
+		showModal(app, "Backup", "Backup completed successfully!", func() {
+			// Return to main menu
+			app.SetRoot(mainMenu, true)
 		})
+	})
+	mainMenu.AddItem("Patch Player", "", 'p', func() {
+		showPatchMenu(app, mainMenu)
+	})
+	mainMenu.AddItem("Quit", "", 'q', func() {
+		app.Stop()
+	})
 
-	menu.SetTitle(" Choose an action ").
-		SetBorder(true).
-		SetBorderPadding(1, 1, 2, 2)
+	mainMenu.SetTitle(" Choose an action ")
+	mainMenu.SetBorder(true)
+	mainMenu.SetBorderPadding(1, 1, 2, 2)
 
-	app.SetRoot(menu, true).SetFocus(menu)
+	app.SetRoot(mainMenu, true).SetFocus(mainMenu)
 }
 
 // showPatchMenu lists all patch folders ("patch_168", etc.) and displays them
@@ -154,8 +157,11 @@ func showPatchMenu(app *tview.Application, prevPage tview.Primitive) {
 		return
 	}
 
-	// Change patchList to a `List` (fix issue)
-	patchList := tview.NewList().SetTitle(" Available patches ").SetBorder(true)
+	// Initialize patchList 
+	var patchList *tview.List = tview.NewList()
+	patchList.SetTitle(" Available patches ")
+	patchList.SetBorder(true)
+	patchList.SetBorderPadding(1, 1, 2, 2)
 
 	for folderName, displayVersion := range patchMap {
 		f := folderName
