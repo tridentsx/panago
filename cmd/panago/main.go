@@ -57,19 +57,19 @@ func main() {
 				return
 			}
 
-		// Try to run the exploit logic:
-		err := runExploitLogic(app, ipAddr)
-		if err != nil {
-			showModal(app, "Error", err.Error(), func() {
-				// On modal dismiss, return to the IP form
-				app.SetRoot(ipForm, true)
-			})
-			return
-		}
+			// Try to run the exploit logic:
+			err := runExploitLogic(app, ipAddr)
+			if err != nil {
+				showModal(app, "Error", err.Error(), func() {
+					// On modal dismiss, return to the IP form
+					app.SetRoot(ipForm, true)
+				})
+				return
+			}
 
-		// If success, show main menu
-		showMainMenu(app, ipAddr)
-	}).
+			// If success, show main menu
+			showMainMenu(app, ipAddr)
+		}).
 		AddButton("Quit", func() {
 			app.Stop()
 		})
@@ -157,7 +157,7 @@ func showPatchMenu(app *tview.Application, prevPage tview.Primitive) {
 		return
 	}
 
-	// Initialize patchList 
+	// Initialize patchList
 	var patchList *tview.List = tview.NewList()
 	patchList.SetTitle(" Available patches ")
 	patchList.SetBorder(true)
