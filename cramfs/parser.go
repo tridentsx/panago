@@ -26,12 +26,38 @@ func ReadSuperblock(file *os.File, cfg *Config) (*Superblock, error) {
 	signature := string(sb.Signature[:])
 	name := string(sb.Name[:])
 
+	// Decode feature flags
+	flagDescriptions := []string{}
+	if sb.Flags&0x00000001 != 0 {
+		flagDescriptions = append(flagDescriptions, "FSID Version 2")
+	}
+	if sb.Flags&0x00000002 != 0 {
+		flagDescriptions = append(flagDescriptions, "Sorted Directories")
+	}
+	if sb.Flags&0x00000100 != 0 {
+		flagDescriptions = append(flagDescriptions, "Support for Holes")
+	}
+	if sb.Flags&0x00000200 != 0 {
+		flagDescriptions = append(flagDescriptions, "Wrong Signature (Reserved)")
+	}
+	if sb.Flags&0x00000400 != 0 {
+		flagDescriptions = append(flagDescriptions, "Shifted Root Offset")
+	}
+
+	// Format feature flags output
+	flagsOutput := "None"
+	if len(flagDescriptions) > 0 {
+		flagsOutput = fmt.Sprintf("%s", flagDescriptions)
+	}
+
+	// Print Superblock Information
 	fmt.Printf("Cramfs Filesystem Detected:\n")
 	fmt.Printf("  Name: %s\n", name)
 	fmt.Printf("  Size: %d bytes\n", sb.Size)
 	fmt.Printf("  Blocks: %d\n", sb.Blocks)
 	fmt.Printf("  Files: %d\n", sb.Files)
 	fmt.Printf("  Signature: %s\n", signature)
+	fmt.Printf("  Feature Flags: %s\n", flagsOutput)
 
 	return &sb, nil
 }
