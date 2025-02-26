@@ -1,18 +1,20 @@
 package main
 
-// DiskManager defines the operations that must be implemented by OS-specific managers
-type DiskManager interface {
-	ListUSBDisks() ([]Disk, error)                   // Lists USB disks
-	FormatDisk(disk Disk) error                      // Formats the selected disk
-	MountAndExtract(disk Disk, tarFile string) error // Mounts and extracts tar archive
-}
-
-// Disk represents a detected USB disk
+// Disk represents a physical disk device
 type Disk struct {
 	Name       string
 	Model      string
 	Size       string
 	DevicePath string
+	Mounted    bool
+	Number     int // For Windows disk number
+}
+
+// DiskManager interface defines disk operations
+type DiskManager interface {
+	ListUSBDisks() ([]Disk, error)
+	Format(disk Disk) error
+	WriteImage(disk Disk, imageFile string, progress func(string)) error
 }
 
 // WindowsDiskManager implements DiskManager for Windows systems

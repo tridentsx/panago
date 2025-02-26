@@ -1,52 +1,52 @@
 //go:build windows
 // +build windows
 
-// This file contains Windows-specific implementations
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
 
 func (w WindowsDiskManager) ListUSBDisks() ([]Disk, error) {
 	cmd := exec.Command("powershell", "-Command",
-		`Get-PhysicalDisk | Where-Object MediaType -eq 'Removable' | Select-Object DeviceId, Model, Size | ConvertTo-Json`)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
+		`Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Select-Object Number,FriendlyName,Size | ConvertTo-Json`)
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list disks: %v", err)
+	}
+
+	var rawDisks []struct {
+		Number       int    `json:"Number"`
+		FriendlyName string `json:"FriendlyName"`
+		Size         int64  `json:"Size"`
+	}
+	if err := json.Unmarshal(output, &rawDisks); err != nil {
+		return nil, fmt.Errorf("failed to parse disk info: %v", err)
 	}
 
 	var disks []Disk
-	if err := json.Unmarshal(out.Bytes(), &disks); err != nil {
-		return nil, err
+	for _, d := range rawDisks {
+		disks = append(disks, Disk{
+			Name:       fmt.Sprintf("Disk %d", d.Number),
+			Model:      d.FriendlyName,
+			Size:       formatSize(d.Size),
+			DevicePath: fmt.Sprintf("\\\\.\\PhysicalDrive%d", d.Number),
+			Number:     d.Number,
+		})
 	}
-
-	for i := range disks {
-		disks[i].DevicePath = fmt.Sprintf(`\\.\PhysicalDrive%d`, i)
-	}
-
 	return disks, nil
 }
 
-func (w WindowsDiskManager) FormatDisk(disk Disk) error {
-	fmt.Printf("Preparing %s for disk image writing...\n", disk.DevicePath)
-
-	// For Windows, we need to clean the disk but not format it
-	script := fmt.Sprintf("select disk %s\nclean\nexit", disk.Name)
+func (w WindowsDiskManager) Format(disk Disk) error {
+	script := fmt.Sprintf("select disk %d\nclean\nexit", disk.Number)
 	cmd := exec.Command("diskpart")
 	cmd.Stdin = strings.NewReader(script)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
-func (w WindowsDiskManager) MountAndExtract(disk Disk, tarFile string) error {
-	return fmt.Errorf("MountAndExtract not used for raw disk images")
+func (w WindowsDiskManager) WriteImage(disk Disk, imageFile string, progress func(string)) error {
+	return extractImageWindowsWithProgress(disk, imageFile, progress)
 }

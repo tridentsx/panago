@@ -48,12 +48,14 @@ func (m MacOSDiskManager) ListUSBDisks() ([]Disk, error) {
 	return disks, nil
 }
 
-func (m MacOSDiskManager) FormatDisk(disk Disk) error {
-	fmt.Printf("Preparing %s for disk image writing...\n", disk.DevicePath)
+func (m MacOSDiskManager) Format(disk Disk) error {
+	// Unmount disk first
+	exec.Command("diskutil", "unmountDisk", disk.DevicePath).Run()
+	return exec.Command("diskutil", "eraseDisk", "JHFS+", "UNTITLED", disk.DevicePath).Run()
+}
 
-	// Unmount all volumes on this disk
-	cmd := exec.Command("diskutil", "unmountDisk", disk.DevicePath)
-	return cmd.Run()
+func (m MacOSDiskManager) WriteImage(disk Disk, imageFile string, progress func(string)) error {
+	return extractImageWithProgress(disk, imageFile, progress)
 }
 
 func (m MacOSDiskManager) MountAndExtract(disk Disk, tarFile string) error {
