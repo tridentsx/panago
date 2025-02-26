@@ -14,42 +14,77 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/klauspost/compress/gzip"
 	"github.com/rivo/tview"
+	"github.com/spf13/cobra"
 )
 
-// runtime selection is handled by init functions in platform-specific files
+var diskManager DiskManager
+
+func init() {
+	// Platform-specific disk manager is initialized in platform-specific init files
+}
 
 func main() {
-	manager := getDiskManager()
-
-	// Step 1: List USB Disks
-	disks, err := manager.ListUSBDisks()
-	if err != nil || len(disks) == 0 {
-		fmt.Println("Error: No USB disks found.")
-		return
+	var rootCmd = &cobra.Command{
+		Use:   "diskutil",
+		Short: "Disk utility tool",
 	}
 
-	// Step 2: Create UI app
-	app := tview.NewApplication()
-	list := tview.NewList().ShowSecondaryText(false)
-	list.SetTitle(" Select USB Drive ").SetBorder(true)
+	// Add subcommands
+	rootCmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List available disks",
+			RunE:  handleListCommand,
+		},
+		&cobra.Command{
+			Use:   "format [device]",
+			Short: "Format a disk",
+			Args:  cobra.ExactArgs(1),
+			RunE:  handleFormatCommand,
+		},
+		&cobra.Command{
+			Use:   "write [device] [image]",
+			Short: "Write disk image to device",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				disk := Disk{DevicePath: args[0]}
+				imageFile := args[1]
 
-	// Add disks to the menu
-	for i, disk := range disks {
-		disk := disk // Capture variable for closure
-		list.AddItem(fmt.Sprintf("[%d] %s (%s, %s)", i, disk.Name, disk.Model, disk.Size), "", 0, func() {
-			app.Stop()
-			startProgressUI(manager, disk)
-		})
-	}
+				// Show progress in terminal
+				progress := func(msg string) {
+					fmt.Printf("\r%s", msg)
+				}
 
-	// Step 3: Run UI
-	if err := app.SetRoot(list, true).Run(); err != nil {
-		fmt.Println("Failed to start UI:", err)
+				return diskManager.WriteImage(disk, imageFile, progress)
+			},
+		},
+	)
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
+// Command handlers
+func handleListCommand(_ *cobra.Command, _ []string) error {
+	disks, err := diskManager.ListUSBDisks()
+	if err != nil {
+		return err
+	}
+	for _, disk := range disks {
+		fmt.Printf("%s (%s) - %s\n", disk.Name, disk.Model, disk.Size)
+	}
+	return nil
+}
+
+func handleFormatCommand(_ *cobra.Command, args []string) error {
+	disk := Disk{DevicePath: args[0]}
+	return diskManager.Format(disk)
+}
+
 // UI for Progress
-func startProgressUI(manager DiskManager, disk Disk) {
+func startProgressUI(disk Disk) {
 	app := tview.NewApplication()
 	progressText := tview.NewTextView().SetTextAlign(tview.AlignCenter).SetDynamicColors(true)
 	progressText.SetBorder(true).SetTitle(" Progress ")
@@ -82,7 +117,7 @@ func startProgressUI(manager DiskManager, disk Disk) {
 	// Run UI in separate goroutine
 	go func() {
 		updateProgress("Formatting Disk... ⏳")
-		err := manager.FormatDisk(disk)
+		err := formatDiskWithProgress(disk, updateProgress)
 		if err != nil {
 			updateProgress("[red]Formatting Failed ❌[white]")
 			time.Sleep(2 * time.Second)
@@ -92,7 +127,7 @@ func startProgressUI(manager DiskManager, disk Disk) {
 
 		updateProgress("Writing Disk Image... 📦")
 		imageFile := "drive.img.gz" // Use your actual image file name
-		err = extractImageWithProgress(manager, disk, imageFile, updateProgress)
+		err = extractImageWithProgress(disk, imageFile, updateProgress)
 		if err != nil {
 			updateProgress("[red]Image Writing Failed ❌[white]: " + err.Error())
 			time.Sleep(2 * time.Second)
@@ -112,7 +147,7 @@ func startProgressUI(manager DiskManager, disk Disk) {
 }
 
 // Format Disk with Real-Time UI Updates
-func formatDiskWithProgress(manager DiskManager, disk Disk, update func(string)) error {
+func formatDiskWithProgress(disk Disk, update func(string)) error {
 	cmd := exec.Command("mkfs.ext4", "-v", disk.DevicePath) // Use proper OS command
 
 	stdoutPipe, _ := cmd.StdoutPipe()
@@ -137,7 +172,7 @@ func formatDiskWithProgress(manager DiskManager, disk Disk, update func(string))
 }
 
 // Extract Image with Real-Time UI Updates
-func extractImageWithProgress(manager DiskManager, disk Disk, imageFile string, update func(string)) error {
+func extractImageWithProgress(disk Disk, imageFile string, update func(string)) error {
 	// Check if we're on Windows using runtime.GOOS
 	if runtime.GOOS == "windows" {
 		return extractImageWindowsWithProgress(disk, imageFile, update)

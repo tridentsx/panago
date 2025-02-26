@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tridentsx/panago/cramfs"
+	"github.com/tridentsx/panago/pkg/cramfs"
 )
 
 func main() {

@@ -4,5 +4,5 @@
 package main
 
 func init() {
-	defaultManager = MacOSDiskManager{}
+	diskManager = MacOSDiskManager{}
 }

@@ -4,5 +4,5 @@
 package main
 
 func init() {
-	defaultManager = LinuxDiskManager{}
+	diskManager = LinuxDiskManager{}
 }

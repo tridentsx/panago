@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rivo/tview"
-
-	"github.com/tridentsx/panago/internal"
+	"github.com/tridentsx/panago/internal/shell"
 )
 
 // Build-time variable via -ldflags (optional)
@@ -58,7 +57,7 @@ func main() {
 			}
 
 			// Try to run the exploit logic:
-			err := runExploitLogic(app, ipAddr)
+			err := runExploitLogic(ipAddr)
 			if err != nil {
 				showModal(app, "Error", err.Error(), func() {
 					// On modal dismiss, return to the IP form
@@ -87,34 +86,35 @@ func main() {
 	}
 }
 
-// runExploitLogic checks ports 60030 & 2222, and sends the two payloads.
-func runExploitLogic(_app *tview.Application, ipAddress string) error {
-	// Check if anything is listening on port 2222 first
-	if internal.IsPort2222Open(ipAddress) {
-		return fmt.Errorf("player at %s is already pawned on port 2222", ipAddress)
+// runExploitLogic checks ports and sends payloads
+func runExploitLogic(ipAddress string) error {
+	// Create a new shell session
+	sh, err := shell.New(ipAddress)
+	if err != nil {
+		return fmt.Errorf("failed to start remote shell: %w", err)
+	}
+	defer sh.Close()
+
+	// Test the connection with a simple command
+	if err := sh.ExecuteCommand("echo ok"); err != nil {
+		return fmt.Errorf("failed to verify shell connection: %w", err)
 	}
 
-	// Check if the player is on port 60030
-	if !internal.IsPlayerAvailable(ipAddress) {
-		return fmt.Errorf("no player detected on port 60030 for IP %s", ipAddress)
+	// Read response to verify connection
+	output, err := sh.GetOutput()
+	if err != nil {
+		return fmt.Errorf("failed to verify shell response: %w", err)
 	}
 
-	// Send first payload
-	if err := internal.SendFirstPayload(ipAddress); err != nil {
-		return fmt.Errorf("failed to send first payload: %v", err)
+	// Read a small amount to verify connection
+	buf := make([]byte, 1024)
+	n, err := output.Read(buf)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read shell response: %w", err)
 	}
 
-	// Wait a moment before the second payload
-	time.Sleep(1 * time.Second)
-
-	// Check if punch binary is ready on port 2222
-	if !internal.IsPort2222Open(ipAddress) {
-		return fmt.Errorf("punch binary not ready on port 2222 for IP %s", ipAddress)
-	}
-
-	// Send second payload
-	if err := internal.SendSecondPayload(ipAddress); err != nil {
-		return fmt.Errorf("failed to send second payload: %v", err)
+	if !strings.Contains(string(buf[:n]), "ok") {
+		return fmt.Errorf("invalid shell response")
 	}
 
 	return nil
@@ -124,11 +124,17 @@ func runExploitLogic(_app *tview.Application, ipAddress string) error {
 var mainMenu *tview.List
 
 // showMainMenu creates a TUI menu to choose between Backup, Patch, or Quit.
-func showMainMenu(app *tview.Application, _ipAddr string) {
+func showMainMenu(app *tview.Application, ipAddr string) {
 	mainMenu = tview.NewList()
 	mainMenu.AddItem("Backup Player", "", 'b', func() {
-		showModal(app, "Backup", "Backup completed successfully!", func() {
-			// Return to main menu
+		err := runExploitLogic(ipAddr)
+		if err != nil {
+			showModal(app, "Error", err.Error(), func() {
+				app.SetRoot(mainMenu, true)
+			})
+			return
+		}
+		showModal(app, "Success", "Operation completed successfully!", func() {
 			app.SetRoot(mainMenu, true)
 		})
 	})
