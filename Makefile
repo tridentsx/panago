@@ -4,13 +4,15 @@ BINARY_DIR := bin
 DISKUTIL_BINARY := $(BINARY_DIR)/diskutil
 PANAGO_BINARY  := $(BINARY_DIR)/panago
 CRAMFS_BINARY  := $(BINARY_DIR)/cramfs
+DISCOVER_BINARY  := $(BINARY_DIR)/discover
 
-.PHONY: all build build-diskutil build-panago clean test fmt lint
+.PHONY: all build build-diskutil build-panago build-cramfs build-discover clean test fmt lint
 
 all: build
 
 ## Build all binaries
-build: build-diskutil build-panago build-patches build-cramfs
+build: build-diskutil build-panago build-patches build-cramfs build-discover
+
 
 ## Build the diskutil binary
 build-diskutil:
@@ -32,6 +34,13 @@ build-cramfs:
 	@mkdir -p $(BINARY_DIR)
 	# If using the root go.mod only, you can do:
 	go build -o $(CRAMFS_BINARY) ./cmd/cramfs
+
+## Build the discover binary
+build-discover:
+	@echo "Building discover..."
+	@mkdir -p $(BINARY_DIR)
+	# If using the root go.mod only, you can do:
+	go build -o $(DISCOVER_BINARY) ./cmd/discover
 
 build-patches:
 	@echo "Putting patches in bin folder..."

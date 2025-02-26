@@ -13,8 +13,6 @@ import (
 	"strings"
 )
 
-
-
 func (w WindowsDiskManager) ListUSBDisks() ([]Disk, error) {
 	cmd := exec.Command("powershell", "-Command",
 		`Get-PhysicalDisk | Where-Object MediaType -eq 'Removable' | Select-Object DeviceId, Model, Size | ConvertTo-Json`)
@@ -38,8 +36,10 @@ func (w WindowsDiskManager) ListUSBDisks() ([]Disk, error) {
 }
 
 func (w WindowsDiskManager) FormatDisk(disk Disk) error {
-	fmt.Println("Formatting drive using DiskPart...")
-	script := fmt.Sprintf("select disk %s\nclean\ncreate partition primary\nformat fs=NTFS quick\nassign\nexit", disk.Name)
+	fmt.Printf("Preparing %s for disk image writing...\n", disk.DevicePath)
+
+	// For Windows, we need to clean the disk but not format it
+	script := fmt.Sprintf("select disk %s\nclean\nexit", disk.Name)
 	cmd := exec.Command("diskpart")
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Stdout = os.Stdout
@@ -48,9 +48,5 @@ func (w WindowsDiskManager) FormatDisk(disk Disk) error {
 }
 
 func (w WindowsDiskManager) MountAndExtract(disk Disk, tarFile string) error {
-	fmt.Printf("Extracting %s to %s...\n", tarFile, disk.DevicePath)
-	cmd := exec.Command("tar", "-xvf", tarFile, "-C", disk.DevicePath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return fmt.Errorf("MountAndExtract not used for raw disk images")
 }
