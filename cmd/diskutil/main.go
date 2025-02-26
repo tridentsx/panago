@@ -3,12 +3,16 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/klauspost/compress/gzip"
 	"github.com/rivo/tview"
 )
 
@@ -78,7 +82,7 @@ func startProgressUI(manager DiskManager, disk Disk) {
 	// Run UI in separate goroutine
 	go func() {
 		updateProgress("Formatting Disk... ⏳")
-		err := formatDiskWithProgress(manager, disk, updateProgress)
+		err := manager.FormatDisk(disk)
 		if err != nil {
 			updateProgress("[red]Formatting Failed ❌[white]")
 			time.Sleep(2 * time.Second)
@@ -86,11 +90,11 @@ func startProgressUI(manager DiskManager, disk Disk) {
 			return
 		}
 
-		updateProgress("Extracting Tar Archive... 📦")
-		tarFile := "backup.tar"
-		err = extractTarWithProgress(manager, disk, tarFile, updateProgress)
+		updateProgress("Writing Disk Image... 📦")
+		imageFile := "drive.img.gz" // Use your actual image file name
+		err = extractImageWithProgress(manager, disk, imageFile, updateProgress)
 		if err != nil {
-			updateProgress("[red]Extraction Failed ❌[white]")
+			updateProgress("[red]Image Writing Failed ❌[white]: " + err.Error())
 			time.Sleep(2 * time.Second)
 			app.Stop()
 			return
@@ -132,21 +136,192 @@ func formatDiskWithProgress(manager DiskManager, disk Disk, update func(string))
 	return nil
 }
 
-// Extract Tar Archive with Real-Time UI Updates
-func extractTarWithProgress(manager DiskManager, disk Disk, tarFile string, update func(string)) error {
-	cmd := exec.Command("tar", "-xvf", tarFile, "-C", disk.DevicePath)
-	stdoutPipe, _ := cmd.StdoutPipe()
-	cmd.Start()
-
-	scanner := bufio.NewScanner(stdoutPipe)
-	count := 0
-	for scanner.Scan() {
-		count++
-		update(fmt.Sprintf("Extracting Data... %d files", count))
+// Extract Image with Real-Time UI Updates
+func extractImageWithProgress(manager DiskManager, disk Disk, imageFile string, update func(string)) error {
+	// Check if we're on Windows using runtime.GOOS
+	if runtime.GOOS == "windows" {
+		return extractImageWindowsWithProgress(disk, imageFile, update)
 	}
 
-	cmd.Wait()
-	update("Extraction Complete ✅")
+	// For Linux and macOS, use the existing implementation
+	// First, decompress the gzip file if needed
+	var sourceFile string
+	if strings.HasSuffix(imageFile, ".gz") {
+		update("Decompressing image file... 📦")
+		sourceFile = strings.TrimSuffix(imageFile, ".gz")
+		cmd := exec.Command("gunzip", "-c", imageFile)
+		outFile, err := os.Create(sourceFile)
+		if err != nil {
+			return fmt.Errorf("failed to create decompressed file: %w", err)
+		}
+		defer outFile.Close()
+
+		cmd.Stdout = outFile
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to decompress image: %w", err)
+		}
+		update("Decompression complete ✅")
+	} else {
+		sourceFile = imageFile
+	}
+
+	// Now write the raw image to the disk
+	update("Writing disk image to USB drive... 📀")
+
+	// Use dd to write the image
+	cmd := exec.Command("dd", "if="+sourceFile, "of="+disk.DevicePath, "bs=4M", "status=progress")
+	stdoutPipe, _ := cmd.StdoutPipe()
+	stderrPipe, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start dd command: %w", err)
+	}
+
+	// Combine stdout and stderr for progress monitoring
+	scanner := bufio.NewScanner(io.MultiReader(stdoutPipe, stderrPipe))
+	for scanner.Scan() {
+		line := scanner.Text()
+		fmt.Println(line) // Print to CLI for debugging
+
+		// Try to extract progress information
+		if strings.Contains(line, "bytes") {
+			update(fmt.Sprintf("Writing image... %s", line))
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("dd command failed: %w", err)
+	}
+
+	update("Image writing complete ✅")
+
+	// Clean up the decompressed file if we created it
+	if imageFile != sourceFile {
+		os.Remove(sourceFile)
+	}
+
+	return nil
+}
+
+// Add this function to handle Windows-specific image writing
+func extractImageWindowsWithProgress(disk Disk, imageFile string, update func(string)) error {
+	// First, decompress the gzip file if needed
+	var sourceFile string
+	if strings.HasSuffix(imageFile, ".gz") {
+		update("Decompressing image file... 📦")
+		sourceFile = strings.TrimSuffix(imageFile, ".gz")
+
+		// Use Go's built-in gzip package instead of PowerShell
+		gzipFile, err := os.Open(imageFile)
+		if err != nil {
+			return fmt.Errorf("failed to open gzip file: %w", err)
+		}
+		defer gzipFile.Close()
+
+		gzipReader, err := gzip.NewReader(gzipFile)
+		if err != nil {
+			return fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzipReader.Close()
+
+		outFile, err := os.Create(sourceFile)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer outFile.Close()
+
+		// Copy with progress reporting
+		totalSize := int64(0)               // We don't know the uncompressed size in advance
+		buffer := make([]byte, 4*1024*1024) // 4MB buffer
+		for {
+			n, err := gzipReader.Read(buffer)
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("error reading from gzip: %w", err)
+			}
+			if n == 0 {
+				break
+			}
+
+			if _, err := outFile.Write(buffer[:n]); err != nil {
+				return fmt.Errorf("error writing to output file: %w", err)
+			}
+
+			totalSize += int64(n)
+			update(fmt.Sprintf("Decompressing... %d MB written", totalSize/(1024*1024)))
+		}
+
+		update("Decompression complete ✅")
+	} else {
+		sourceFile = imageFile
+	}
+
+	// Now write the raw image to the disk using PowerShell and Win32 APIs
+	update("Writing disk image to USB drive... 📀")
+
+	// Create a PowerShell script to write the image
+	scriptContent := `
+	param($imagePath, $devicePath)
+	
+	$bytes = [System.IO.File]::ReadAllBytes($imagePath)
+	$device = New-Object System.IO.FileStream($devicePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write)
+	
+	$totalSize = $bytes.Length
+	$chunkSize = 1MB
+	$written = 0
+	
+	for ($i = 0; $i -lt $totalSize; $i += $chunkSize) {
+		$remaining = $totalSize - $i
+		$toWrite = [Math]::Min($chunkSize, $remaining)
+		$device.Write($bytes, $i, $toWrite)
+		$written += $toWrite
+		$percent = [Math]::Round(($written / $totalSize) * 100)
+		Write-Host "Progress: $percent% ($written / $totalSize bytes)"
+	}
+	
+	$device.Close()
+	Write-Host "Write complete"
+	`
+
+	// Save the script to a temporary file
+	scriptFile := "write_image.ps1"
+	if err := os.WriteFile(scriptFile, []byte(scriptContent), 0644); err != nil {
+		return fmt.Errorf("failed to create PowerShell script: %w", err)
+	}
+	defer os.Remove(scriptFile)
+
+	// Run the PowerShell script
+	cmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptFile,
+		"-imagePath", sourceFile, "-devicePath", disk.DevicePath)
+
+	stdoutPipe, _ := cmd.StdoutPipe()
+	stderrPipe, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start PowerShell script: %w", err)
+	}
+
+	// Monitor progress
+	scanner := bufio.NewScanner(io.MultiReader(stdoutPipe, stderrPipe))
+	for scanner.Scan() {
+		line := scanner.Text()
+		fmt.Println(line) // Print to CLI for debugging
+
+		if strings.Contains(line, "Progress:") {
+			update(fmt.Sprintf("Writing image... %s", line))
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("PowerShell script failed: %w", err)
+	}
+
+	update("Image writing complete ✅")
+
+	// Clean up the decompressed file if we created it
+	if imageFile != sourceFile {
+		os.Remove(sourceFile)
+	}
+
 	return nil
 }
 

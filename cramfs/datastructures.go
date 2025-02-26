@@ -12,7 +12,7 @@ type Superblock struct {
 	Edition   uint32   // Filesystem edition
 	Blocks    uint32   // Number of blocks
 	Files     uint32   // Number of files
-	Name      [16]byte // Filesystem name
+	Name      [16]byte // Volume name
 }
 
 type Inode struct {
@@ -101,3 +101,9 @@ type Inode struct {
 
 
 */
+
+// Add these constants
+const (
+	CRAMFS_MAGIC      = 0x28cd3d45
+	CRAMFS_BLOCK_SIZE = 4096
+)
