@@ -1,16 +1,7 @@
 # .goreleaser.yaml
 builds:
-  - binary: diskutil
-    main: ./cmd/diskutil
-    goos:
-      - linux
-      - windows
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-
-  - binary: panago
+  - id: panago
+    binary: panago
     main: ./cmd/panago
     goos:
       - linux
@@ -19,13 +10,47 @@ builds:
     goarch:
       - amd64
       - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+  - id: shell
+    binary: shell
+    main: ./cmd/shell
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
 
 # Example: specify how archives (zip/tar) are produced
 archives:
-  - format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .OS }}_{{ .Arch }}"
-  - format: zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .OS }}_{{ .Arch }}"
+  - format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE*
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
 
 # Optionally define extra release notes, builds, etc.
 # See https://goreleaser.com/customization/ for full config options.
