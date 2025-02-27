@@ -2,17 +2,33 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"io/ioutil"
-	"os"
 	"strings"
+	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"github.com/tridentsx/panago/internal/shell"
+	"github.com/tridentsx/panago/internal/backup"
+	"github.com/tridentsx/panago/internal/discover"
+	"github.com/tridentsx/panago/internal/exploit"
 )
 
 // Build-time variable via -ldflags (optional)
 var version = "dev"
+
+var (
+	app    *tview.Application
+	status *PlayerStatus
+	flex   *tview.Flex
+)
+
+type PlayerStatus struct {
+	ip        string
+	detected  bool
+	version   string
+	exploited bool
+	lastSeen  time.Time
+}
 
 // findPatchFolders scans the current directory for folders named "patch_XXX" and
 // returns a map: folderName => displayVersion (e.g. "patch_169" => "1.69").
@@ -41,165 +57,227 @@ func findPatchFolders() map[string]string {
 }
 
 func main() {
-	app := tview.NewApplication()
+	app = tview.NewApplication()
+	status = &PlayerStatus{}
 
-	// Create and configure the IP form
-	var ipForm *tview.Form
-	ipForm = tview.NewForm().
-		AddInputField("IP Address", "", 20, nil, nil).
-		AddButton("Connect", func() {
-			ipAddr := ipForm.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
-			if ipAddr == "" {
-				showModal(app, "Error", "IP Address cannot be empty.", func() {
-					app.SetRoot(ipForm, true)
-				})
-				return
-			}
+	// Create main layout
+	flex = tview.NewFlex().SetDirection(tview.FlexRow)
 
-			// Try to run the exploit logic:
-			err := runExploitLogic(ipAddr)
-			if err != nil {
-				showModal(app, "Error", err.Error(), func() {
-					// On modal dismiss, return to the IP form
-					app.SetRoot(ipForm, true)
-				})
-				return
-			}
+	// Status panel at top
+	statusPanel := createStatusPanel()
+	flex.AddItem(statusPanel, 6, 0, false)
 
-			// If success, show main menu
-			showMainMenu(app, ipAddr)
-		}).
-		AddButton("Quit", func() {
-			app.Stop()
-		})
+	// Main content area
+	content := tview.NewFlex().SetDirection(tview.FlexRow)
+	flex.AddItem(content, 0, 1, true)
 
-	ipForm.SetTitle(fmt.Sprintf(" panago v%s ", version)).
-		SetBorder(true).
-		SetBorderPadding(1, 1, 2, 2)
+	// IP Input form
+	ipForm := createIPForm(content)
+	content.AddItem(ipForm, 0, 1, true)
 
-	app.SetRoot(ipForm, true).SetFocus(ipForm)
-
-	// Start the application
+	app.SetRoot(flex, true).EnableMouse(true)
 	if err := app.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
-		os.Exit(1)
+		panic(err)
 	}
 }
 
-// runExploitLogic checks ports and sends payloads
-func runExploitLogic(ipAddress string) error {
-	// Create a new shell session
-	sh, err := shell.New(ipAddress)
-	if err != nil {
-		return fmt.Errorf("failed to start remote shell: %w", err)
-	}
-	defer sh.Close()
+func createStatusPanel() *tview.TextView {
+	statusView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
 
-	// Test the connection with a simple command
-	if err := sh.ExecuteCommand("echo ok"); err != nil {
-		return fmt.Errorf("failed to verify shell connection: %w", err)
-	}
-
-	// Read response to verify connection
-	output, err := sh.GetOutput()
-	if err != nil {
-		return fmt.Errorf("failed to verify shell response: %w", err)
-	}
-
-	// Read a small amount to verify connection
-	buf := make([]byte, 1024)
-	n, err := output.Read(buf)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read shell response: %w", err)
-	}
-
-	if !strings.Contains(string(buf[:n]), "ok") {
-		return fmt.Errorf("invalid shell response")
-	}
-
-	return nil
-}
-
-// Global menu variable to ensure proper scope in closures
-var mainMenu *tview.List
-
-// showMainMenu creates a TUI menu to choose between Backup, Patch, or Quit.
-func showMainMenu(app *tview.Application, ipAddr string) {
-	mainMenu = tview.NewList()
-	mainMenu.AddItem("Backup Player", "", 'b', func() {
-		err := runExploitLogic(ipAddr)
-		if err != nil {
-			showModal(app, "Error", err.Error(), func() {
-				app.SetRoot(mainMenu, true)
+	// Update status periodically
+	go func() {
+		for {
+			app.QueueUpdateDraw(func() {
+				updateStatus(statusView)
 			})
-			return
+			time.Sleep(time.Second)
 		}
-		showModal(app, "Success", "Operation completed successfully!", func() {
-			app.SetRoot(mainMenu, true)
-		})
-	})
-	mainMenu.AddItem("Patch Player", "", 'p', func() {
-		showPatchMenu(app, mainMenu)
-	})
-	mainMenu.AddItem("Quit", "", 'q', func() {
-		app.Stop()
-	})
+	}()
 
-	mainMenu.SetTitle(" Choose an action ")
-	mainMenu.SetBorder(true)
-	mainMenu.SetBorderPadding(1, 1, 2, 2)
-
-	app.SetRoot(mainMenu, true).SetFocus(mainMenu)
+	return statusView
 }
 
-// showPatchMenu lists all patch folders ("patch_168", etc.) and displays them
-// as items (1.68, 1.69, etc.). Selecting one can trigger your patch logic.
-func showPatchMenu(app *tview.Application, prevPage tview.Primitive) {
-	patchMap := findPatchFolders()
-	if len(patchMap) == 0 {
-		showModal(app, "No patches found", "No patch_* folders in current directory.", func() {
-			app.SetRoot(prevPage, true)
-		})
+func updateStatus(view *tview.TextView) {
+	view.Clear()
+	fmt.Fprintf(view, "Panago v%s\n", version)
+	fmt.Fprintf(view, "Target IP: %s\n", status.ip)
+
+	if status.ip == "" {
+		fmt.Fprintf(view, "[yellow]Waiting for IP input...[white]\n")
 		return
 	}
 
-	// Initialize patchList
-	var patchList *tview.List = tview.NewList()
-	patchList.SetTitle(" Available patches ")
-	patchList.SetBorder(true)
-	patchList.SetBorderPadding(1, 1, 2, 2)
-
-	for folderName, displayVersion := range patchMap {
-		f := folderName
-		dv := displayVersion
-		patchList.AddItem(dv, "", 0, func() {
-			// PATCH logic placeholder
-			msg := fmt.Sprintf("Patch %s selected. (Folder: %s)", dv, f)
-			showModal(app, "Patch selected", msg, func() {
-				// Return to main menu
-				app.SetRoot(prevPage, true)
-			})
-		})
+	if status.detected {
+		fmt.Fprintf(view, "[green]Player detected[white] - Version: %s\n", status.version)
+		if status.exploited {
+			fmt.Fprintf(view, "[red]Exploit active[white]\n")
+		}
+		fmt.Fprintf(view, "Last seen: %s\n", status.lastSeen.Format("15:04:05"))
+	} else {
+		fmt.Fprintf(view, "[red]Player not detected[white]\n")
 	}
-
-	patchList.AddItem("Back", "", 'b', func() {
-		app.SetRoot(prevPage, true)
-	})
-
-	app.SetRoot(patchList, true).SetFocus(patchList)
 }
 
-// showModal is a helper to display a message box with an "OK" button.
-func showModal(app *tview.Application, title, message string, onDismiss func()) {
-	modal := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			onDismiss()
+func createIPForm(content *tview.Flex) *tview.Form {
+	form := tview.NewForm()
+	form.AddInputField("IP Address", "", 20, nil, nil)
+	form.AddButton("Connect", func() {
+		ip := form.GetFormItemByLabel("IP Address").(*tview.InputField).GetText()
+		if ip == "" {
+			showMessage("Error", "Please enter an IP address")
+			return
+		}
+		status.ip = ip
+
+		// Start player detection
+		go detectPlayer(ip)
+
+		// Show main menu
+		content.RemoveItem(form)
+		menu := createMainMenu(content)
+		content.AddItem(menu, 0, 1, true)
+		app.SetFocus(menu)
+	})
+	form.AddButton("Quit", func() {
+		app.Stop()
+	})
+
+	return form
+}
+
+func createMainMenu(content *tview.Flex) *tview.List {
+	menu := tview.NewList().
+		AddItem("Execute Exploit", "Run the initial exploit", 'e', func() {
+			go executeExploit()
+		}).
+		AddItem("Create USB Disk", "Prepare a USB disk", 'u', func() {
+			showDiskMenu()
+		}).
+		AddItem("Open Shell", "Open interactive shell", 's', func() {
+			openShell()
+		}).
+		AddItem("Backup Player", "Create player backup", 'b', func() {
+			createBackup()
+		}).
+		AddItem("Update Player", "Install player update", 'p', func() {
+			showUpdateMenu()
+		}).
+		AddItem("Back", "Return to IP input", 'q', func() {
+			content.Clear()
+			form := createIPForm(content)
+			content.AddItem(form, 0, 1, true)
+			app.SetFocus(form)
 		})
 
-	modal.SetTitle(" " + title + " ").
-		SetBorder(true)
+	return menu
+}
 
-	app.SetRoot(modal, true).SetFocus(modal)
+func detectPlayer(ip string) {
+	for {
+		if status.ip != ip {
+			return // IP changed, stop detection
+		}
+
+		// Use discover package to check player
+		info, err := discover.CheckPlayer(ip)
+		if err == nil {
+			status.detected = true
+			status.version = info.Version
+			status.lastSeen = time.Now()
+		} else {
+			status.detected = false
+		}
+
+		// Check exploit status
+		if exploit.IsActive(ip) {
+			status.exploited = true
+		} else {
+			status.exploited = false
+		}
+
+		time.Sleep(time.Second * 5)
+	}
+}
+
+func executeExploit() {
+	showProgress("Executing exploit...", func() error {
+		punch := exploit.NewPunchExploit(status.ip)
+		_, err := punch.Execute("SHELL")
+		if err != nil {
+			return fmt.Errorf("exploit failed: %w", err)
+		}
+		status.exploited = true
+		return nil
+	})
+}
+
+func openShell() {
+	if !status.exploited {
+		showMessage("Error", "Please execute exploit first")
+		return
+	}
+
+	showMessage("Opening Shell", "Shell functionality will be implemented in terminal")
+	// Implementation will launch external terminal with shell
+}
+
+func createBackup() {
+	if !status.exploited {
+		showMessage("Error", "Please execute exploit first")
+		return
+	}
+
+	showProgress("Creating backup...", func() error {
+		b, err := backup.New(status.ip)
+		if err != nil {
+			return err
+		}
+		defer b.Close()
+		return b.CreateBackup()
+	})
+}
+
+func showDiskMenu() {
+	// Implementation for disk creation menu
+}
+
+func showUpdateMenu() {
+	// Implementation for update menu
+}
+
+func showProgress(message string, operation func() error) {
+	modal := tview.NewModal()
+	modal.SetText(message)
+	modal.SetBackgroundColor(tcell.ColorDefault)
+
+	app.QueueUpdateDraw(func() {
+		app.SetRoot(modal, false)
+	})
+
+	go func() {
+		err := operation()
+		app.QueueUpdateDraw(func() {
+			if err != nil {
+				showMessage("Error", err.Error())
+			} else {
+				showMessage("Success", "Operation completed")
+			}
+		})
+	}()
+}
+
+func showMessage(title, message string) {
+	modal := tview.NewModal()
+	modal.SetText(message)
+	modal.SetTitle(" " + title + " ")
+	modal.AddButtons([]string{"OK"})
+	modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+		app.SetRoot(flex, true)
+	})
+
+	app.QueueUpdateDraw(func() {
+		app.SetRoot(modal, false)
+	})
 }
