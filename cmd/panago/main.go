@@ -11,6 +11,7 @@ import (
 	"github.com/tridentsx/panago/internal/backup"
 	"github.com/tridentsx/panago/internal/discover"
 	"github.com/tridentsx/panago/internal/exploit"
+	"github.com/tridentsx/panago/internal/keydump"
 )
 
 // Build-time variable via -ldflags (optional)
@@ -158,6 +159,9 @@ func createMainMenu(content *tview.Flex) *tview.List {
 		AddItem("Open Shell", "Open interactive shell", 's', func() {
 			openShell()
 		}).
+		AddItem("Extract FPC Keys", "Dump firmware decryption keys", 'k', func() {
+			go extractFPCKeys()
+		}).
 		AddItem("Backup Player", "Create player backup", 'b', func() {
 			createBackup()
 		}).
@@ -241,6 +245,45 @@ func createBackup() {
 
 func showDiskMenu() {
 	// Implementation for disk creation menu
+}
+
+func extractFPCKeys() {
+	if !status.exploited {
+		showMessage("Error", "Please execute exploit first")
+		return
+	}
+
+	showProgress("Extracting FPC keys...", func() error {
+		kd, err := keydump.New(status.ip)
+		if err != nil {
+			return fmt.Errorf("failed to connect: %w", err)
+		}
+		defer kd.Close()
+
+		// First, download libfmupre.so from device
+		showMessage("Info", "Downloading libfmupre.so from device...")
+		
+		// Patch it locally
+		if err := keydump.PatchLibrary("libfmupre.so", "libfmupre_patched.so"); err != nil {
+			return fmt.Errorf("failed to patch library: %w", err)
+		}
+
+		// Extract keys
+		k1, k2, err := kd.ExtractKeys("libfmupre_patched.so")
+		if err != nil {
+			return err
+		}
+
+		// Display keys
+		msg := fmt.Sprintf("FPC Keys extracted!\n\nK1: %x\nK2: %x\n\nSaved to fpc_keys.txt", k1, k2)
+		showMessage("Success", msg)
+
+		// Save to file
+		ioutil.WriteFile("fpc_keys.txt", 
+			[]byte(fmt.Sprintf("K1=%x\nK2=%x\n", k1, k2)), 0644)
+
+		return nil
+	})
 }
 
 func showUpdateMenu() {
