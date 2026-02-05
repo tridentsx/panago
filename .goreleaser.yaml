@@ -1,5 +1,22 @@
 # .goreleaser.yaml
 builds:
+  - id: panago-cli
+    binary: panago-cli
+    main: ./cmd/cli
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - 7
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
   - id: panago
     binary: panago
     main: ./cmd/panago
