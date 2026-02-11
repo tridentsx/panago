@@ -1,7 +1,6 @@
 //go:build windows
-// +build windows
 
-package main
+package disk
 
 import (
 	"encoding/json"
@@ -9,6 +8,13 @@ import (
 	"os/exec"
 	"strings"
 )
+
+// WindowsDiskManager implements DiskManager for Windows systems
+type WindowsDiskManager struct{}
+
+func newPlatformManager() DiskManager {
+	return WindowsDiskManager{}
+}
 
 func (w WindowsDiskManager) ListUSBDisks() ([]Disk, error) {
 	cmd := exec.Command("powershell", "-Command",
@@ -32,7 +38,7 @@ func (w WindowsDiskManager) ListUSBDisks() ([]Disk, error) {
 		disks = append(disks, Disk{
 			Name:       fmt.Sprintf("Disk %d", d.Number),
 			Model:      d.FriendlyName,
-			Size:       formatSize(d.Size),
+			Size:       FormatSize(d.Size),
 			DevicePath: fmt.Sprintf("\\\\.\\PhysicalDrive%d", d.Number),
 			Number:     d.Number,
 		})
@@ -48,5 +54,5 @@ func (w WindowsDiskManager) Format(disk Disk) error {
 }
 
 func (w WindowsDiskManager) WriteImage(disk Disk, imageFile string, progress func(string)) error {
-	return extractImageWindowsWithProgress(disk, imageFile, progress)
+	return ExtractImageWindowsWithProgress(disk, imageFile, progress)
 }

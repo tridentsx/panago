@@ -106,12 +106,8 @@ func CompressLZSS(src []byte) []byte {
 				if si+maxLen > len(src) {
 					maxLen = len(src) - si
 				}
-				// Also limit by available ring buffer data
-				if maxLen > dist {
-					maxLen = dist
-				}
-
-				for matchLen < maxLen && src[pos+matchLen] == src[si+matchLen] {
+				// Match can exceed distance (repeated patterns decoded via ring wrap-around)
+				for matchLen < maxLen && src[pos+(matchLen%dist)] == src[si+matchLen] {
 					matchLen++
 				}
 

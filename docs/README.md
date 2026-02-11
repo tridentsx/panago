@@ -5,8 +5,11 @@ Tool for device discovery and management.
 
 ## Components
 - Device Discovery (SSDP)
-- Shell Access
+- USB Disk Management
+- Firmware Tools (decode/encode/split/combine)
 - CramFS Management
+- RomFS Management
+- TUI Application
 
 ## Installation
 ...

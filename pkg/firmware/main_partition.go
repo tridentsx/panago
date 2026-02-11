@@ -101,20 +101,6 @@ func SplitMainBin(mainPath, outputDir string) ([]MainPartition, error) {
 	return partitions, nil
 }
 
-// findNextPartition scans for the next cramfs or romfs magic
-func findNextPartition(data []byte, start int64) int64 {
-	for i := start; i < int64(len(data))-4; i += 4 {
-		magic := binary.LittleEndian.Uint32(data[i : i+4])
-		if magic == CramfsMagic {
-			return i
-		}
-		if string(data[i:i+4]) == "-rom" {
-			return i
-		}
-	}
-	return int64(len(data))
-}
-
 // CombineMainBin combines fma4, fma5, fma6, fma7 back into MAIN.bin
 // Partitions are concatenated directly - they should already include any needed padding.
 func CombineMainBin(inputDir, outputPath string) error {
@@ -142,23 +128,3 @@ func CombineMainBin(inputDir, outputPath string) error {
 	return nil
 }
 
-// ExtractFMA5 is a convenience function to extract and split fma5 in one step
-func ExtractFMA5(mainPath, outputDir string) error {
-	// First split MAIN.bin
-	parts, err := SplitMainBin(mainPath, outputDir)
-	if err != nil {
-		return err
-	}
-
-	// Find fma5
-	for _, p := range parts {
-		if p.Name == "fma5" && p.Type == "cramfs" {
-			fmt.Printf("\nfma5 found: %s/fma5.bin (%d bytes)\n", outputDir, p.Size)
-			fmt.Printf("Extract with: panago-cli cramfs extract %s/fma5.bin %s/fma5_root/\n",
-				outputDir, outputDir)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("fma5 not found in MAIN.bin")
-}

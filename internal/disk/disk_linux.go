@@ -1,13 +1,19 @@
 //go:build linux
-// +build linux
 
-package main
+package disk
 
 import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
 )
+
+// LinuxDiskManager implements DiskManager for Linux systems
+type LinuxDiskManager struct{}
+
+func newPlatformManager() DiskManager {
+	return LinuxDiskManager{}
+}
 
 func (l LinuxDiskManager) ListUSBDisks() ([]Disk, error) {
 	cmd := exec.Command("lsblk", "-Jbo", "NAME,MODEL,SIZE,TRAN,TYPE")
@@ -36,7 +42,7 @@ func (l LinuxDiskManager) ListUSBDisks() ([]Disk, error) {
 			disks = append(disks, Disk{
 				Name:       d.Name,
 				Model:      d.Model,
-				Size:       formatSize(d.Size),
+				Size:       FormatSize(d.Size),
 				DevicePath: "/dev/" + d.Name,
 			})
 		}
@@ -51,5 +57,5 @@ func (l LinuxDiskManager) Format(disk Disk) error {
 }
 
 func (l LinuxDiskManager) WriteImage(disk Disk, imageFile string, progress func(string)) error {
-	return extractImageWithProgress(disk, imageFile, progress)
+	return ExtractImageWithProgress(disk, imageFile, progress)
 }

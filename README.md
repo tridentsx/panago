@@ -6,8 +6,9 @@ Golang toolkit for Panasonic DP-UB9000 (and similar) UHD Blu-ray player research
 
 - **Firmware Tools** - Decode, encode, and analyze Panasonic firmware files (PANAEUSB.FRM)
 - **Cramfs Tools** - Extract and create cramfs filesystem images used by Panasonic devices
-- **Device Discovery** - Find Panasonic players on the network
-- **Shell Access** - Interactive shell for exploited devices
+- **Romfs Tools** - Extract and create romfs filesystem images
+- **Device Discovery** - Find Panasonic players on the network via SSDP
+- **USB Disk Management** - List, format, and write disk images to USB drives
 - **TUI Application** - Graphical terminal interface for device management
 
 ## Installation
@@ -24,11 +25,16 @@ make build
 
 Download from the [Releases](https://github.com/tridentsx/panago/releases) page.
 
+## Binaries
+
+The project builds two binaries:
+
+- **`panago`** - TUI (terminal UI) application for interactive device management
+- **`panago-cli`** - Command-line interface with all tools as subcommands
+
 ## Usage
 
 ### Unified CLI (`panago-cli`)
-
-The unified CLI provides all firmware and cramfs tools in a single binary:
 
 ```bash
 panago-cli [command] [subcommand] [options]
@@ -208,16 +214,26 @@ Symlinks: 35
 Total content size: 18601986 bytes
 ```
 
-### Standalone Tools
+### Device Discovery
 
-Individual tools are also available:
+Scan the local network for UPnP devices:
 
 ```bash
-# Firmware tool
-./bin/firmware decode PANAEUSB.FRM ./extracted/
+# Discover all UPnP devices
+panago-cli discover
 
-# Cramfs tool
-./bin/cramfsck extract-all fma5.bin ./rootfs/
+# Show only Panasonic players
+panago-cli discover --panasonic
+```
+
+### USB Disk Management
+
+```bash
+# List available USB disks
+panago-cli disk list
+
+# Format and write a disk image to a USB device
+panago-cli disk write /dev/sdX drive.img.gz
 ```
 
 ### TUI Application
@@ -227,6 +243,8 @@ The graphical terminal interface for device management:
 ```bash
 ./bin/panago
 ```
+
+The TUI automatically scans for Panasonic players on startup via SSDP, with an option for manual IP entry. It includes device exploitation, shell access, FPC key extraction, backup, USB disk creation, and firmware updates.
 
 ## Firmware Modification Workflow
 
@@ -320,7 +338,7 @@ Panasonic uses "old cramfs format" (flags=0, no FSID_VERSION_2):
 ### Building
 
 ```bash
-make build      # Build all binaries
+make build      # Build all binaries (panago + panago-cli)
 make test       # Run tests
 make clean      # Clean build artifacts
 ```

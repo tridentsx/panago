@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/koron/go-ssdp"
@@ -96,4 +98,32 @@ func (d *Discoverer) getDeviceInfo(service ssdp.Service) (DeviceInfo, error) {
 	device.PresentationURL = desc.Device.PresentationURL
 
 	return device, nil
+}
+
+// ExtractIP parses a URL and returns just the host (without port).
+func ExtractIP(location string) string {
+	u, err := url.Parse(location)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	return host
+}
+
+// DiscoverPanasonic discovers UPnP devices and returns only those
+// whose Manufacturer contains "Panasonic".
+func DiscoverPanasonic(timeout int) ([]DeviceInfo, error) {
+	d := NewDiscoverer(timeout)
+	devices, err := d.Discover()
+	if err != nil {
+		return nil, err
+	}
+
+	var panasonic []DeviceInfo
+	for _, dev := range devices {
+		if strings.Contains(dev.Manufacturer, "Panasonic") {
+			panasonic = append(panasonic, dev)
+		}
+	}
+	return panasonic, nil
 }

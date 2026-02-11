@@ -87,17 +87,32 @@ type MainListEntry struct {
 
 // MainEntryHeader is the 64-byte header for each sub-entry in MAIN
 type MainEntryHeader struct {
-	Signature    [14]byte // Entry signature
-	CompType     uint16   // Compression type (0=LZSS, 1=gzip+LZSS)
+	Signature    [14]byte // Entry signature (e.g. "EXTRHEADDRVD  ")
+	CompType     uint16   // Compression type (observed: 2 = raw LZSS)
 	DecompSize   uint32   // Decompressed size
 	DestAddr     uint32   // Destination address in memory
 	CompSize     uint32   // Compressed size
-	Unknown      uint32   // Unknown field
-	FooterOffset uint32   // Footer offset
-	BaseAddr     uint32   // Base address
-	Checksum     uint32   // Data checksum
-	ChecksumFlag uint8    // Checksum flag
+	Slack        uint32   // BufferConstant - FooterOffset (unused space in allocation)
+	FooterOffset uint32   // 64 + align4(CompSize) — offset of footer within entry
+	BaseAddr     uint32   // Base address (observed: 0)
+	Checksum     uint32   // Adler32 of every 16th byte of decompressed data
+	ChecksumFlag uint8    // Checksum flag (observed: 0x10)
 	Unused       [19]byte // Padding
+}
+
+// MainPartitionMetadata stores structural parameters for the MAIN partition.
+// Most per-entry fields (FooterOff, Unknown, ListSize) are computed from CompSize
+// during encoding. Only values that can't be derived are stored here.
+type MainPartitionMetadata struct {
+	FirstHeader    string `json:"first_header"`     // Hex-encoded 0x30-byte first header (date, version)
+	ListHeaderUnk  uint32 `json:"list_header_unk"`  // MainListHeader.Unknown field (observed: 1)
+	ListHeaderUnk2 uint32 `json:"list_header_unk2"` // MainListHeader.Unknown2 field (observed: 2)
+	EntrySignature string `json:"entry_signature"`  // Hex-encoded 14-byte entry signature
+	CompType       uint16 `json:"comp_type"`        // Compression type for all entries (observed: 2)
+	ChunkSize      uint32 `json:"chunk_size"`       // Decompressed chunk size (observed: 0x1000000 = 16MB)
+	BufferConstant uint32 `json:"buffer_constant"`  // Slack+FooterOff constant (observed: 18846664)
+	ChecksumFlag   uint8  `json:"checksum_flag"`    // Entry header checksum flag (observed: 0x10)
+	EntryCount     int    `json:"entry_count"`      // Number of sub-entries
 }
 
 // FirmwareInfo contains metadata about a firmware file

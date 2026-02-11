@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -181,7 +183,7 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 		return fmt.Errorf("MAIN partition too small")
 	}
 
-	// Decrypt the header portion
+	// Decrypt the header portion and capture for metadata
 	headerPart := make([]byte, MainListHeaderOff)
 	copy(headerPart, data[:MainListHeaderOff])
 	d.feistel.Decrypt(headerPart)
@@ -223,6 +225,14 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 	// Concatenated output for MAIN.bin
 	var mainOut []byte
 
+	// Collect structural constants from first valid entry for metadata
+	var entrySignature []byte
+	var compType uint16
+	var chunkSize uint32
+	var bufferConstant uint32
+	var checksumFlag uint8
+	processedEntries := 0
+
 	// Process each entry
 	for i, entry := range entries {
 		if entry.Size == 0 || int(offset)+int(entry.Size) > len(data) {
@@ -258,13 +268,28 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 			continue
 		}
 
-		compData := entryData[MainEntryHeaderLen:]
+		// Capture structural constants from first entry
+		if processedEntries == 0 {
+			entrySignature = make([]byte, 14)
+			copy(entrySignature, entryData[:14])
+			compType = ehdr.CompType
+			chunkSize = ehdr.DecompSize
+			checksumFlag = entryData[44]
+
+			// Derive buffer constant: Slack + FooterOffset
+			slack := binary.LittleEndian.Uint32(entryData[28:32])
+			footerOff := binary.LittleEndian.Uint32(entryData[32:36])
+			bufferConstant = slack + footerOff
+		}
+
+		// Use only compSize bytes for decompression (not the full entry)
+		compData := entryData[MainEntryHeaderLen : MainEntryHeaderLen+int(ehdr.CompSize)]
 
 		var decompData []byte
 
 		if ehdr.CompType == 1 {
 			// Gzip + LZSS
-			decompData = d.decompressGzipLZSS(compData, ehdr.DecompSize)
+			decompData = d.decompressGzipLZSS(compData)
 		} else {
 			// Raw LZSS
 			decompData = DecompressLZSSWithSize(compData, int(ehdr.DecompSize))
@@ -276,6 +301,7 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 				fmt.Printf("    Entry %d: %d -> %d bytes\n", i, ehdr.CompSize, len(decompData))
 			}
 		}
+		processedEntries++
 
 		offset += entry.Size
 	}
@@ -291,11 +317,35 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 		}
 	}
 
+	// Save lean MAIN_metadata.json
+	meta := MainPartitionMetadata{
+		FirstHeader:    hex.EncodeToString(headerPart),
+		ListHeaderUnk:  hdr.Unknown,
+		ListHeaderUnk2: hdr.Unknown2,
+		EntrySignature: hex.EncodeToString(entrySignature),
+		CompType:       compType,
+		ChunkSize:      chunkSize,
+		BufferConstant: bufferConstant,
+		ChecksumFlag:   checksumFlag,
+		EntryCount:     processedEntries,
+	}
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal MAIN metadata: %w", err)
+	}
+	metaPath := filepath.Join(outputDir, "MAIN_metadata.json")
+	if err := os.WriteFile(metaPath, metaJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write MAIN metadata: %w", err)
+	}
+	if d.verbose {
+		fmt.Printf("  Saved MAIN_metadata.json (%d entries)\n", processedEntries)
+	}
+
 	return nil
 }
 
 // decompressGzipLZSS decompresses gzip-wrapped LZSS data
-func (d *Decoder) decompressGzipLZSS(data []byte, maxSize uint32) []byte {
+func (d *Decoder) decompressGzipLZSS(data []byte) []byte {
 	// First decompress gzip
 	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {

@@ -2,25 +2,27 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
-	"strings"
+	"os"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/tridentsx/panago/internal/backup"
 	"github.com/tridentsx/panago/internal/discover"
+	"github.com/tridentsx/panago/internal/disk"
 	"github.com/tridentsx/panago/internal/exploit"
 	"github.com/tridentsx/panago/internal/keydump"
+	"github.com/tridentsx/panago/internal/upnp"
 )
 
 // Build-time variable via -ldflags (optional)
 var version = "dev"
 
 var (
-	app    *tview.Application
-	status *PlayerStatus
-	flex   *tview.Flex
+	app     *tview.Application
+	status  *PlayerStatus
+	flex    *tview.Flex
+	content *tview.Flex
 )
 
 type PlayerStatus struct {
@@ -29,32 +31,6 @@ type PlayerStatus struct {
 	version   string
 	exploited bool
 	lastSeen  time.Time
-}
-
-// findPatchFolders scans the current directory for folders named "patch_XXX" and
-// returns a map: folderName => displayVersion (e.g. "patch_169" => "1.69").
-func findPatchFolders() map[string]string {
-	result := make(map[string]string)
-
-	files, err := ioutil.ReadDir(".")
-	if err != nil {
-		return result
-	}
-
-	for _, f := range files {
-		if f.IsDir() && strings.HasPrefix(f.Name(), "patch_") {
-			// Example: "patch_169" => "1.69"
-			numStr := strings.TrimPrefix(f.Name(), "patch_") // "169"
-			if len(numStr) >= 2 {
-				displayVersion := numStr[:1] + "." + numStr[1:] // e.g. "1.69"
-				result[f.Name()] = displayVersion
-			} else {
-				// If there's some odd naming, just store as-is
-				result[f.Name()] = numStr
-			}
-		}
-	}
-	return result
 }
 
 func main() {
@@ -69,12 +45,11 @@ func main() {
 	flex.AddItem(statusPanel, 6, 0, false)
 
 	// Main content area
-	content := tview.NewFlex().SetDirection(tview.FlexRow)
+	content = tview.NewFlex().SetDirection(tview.FlexRow)
 	flex.AddItem(content, 0, 1, true)
 
-	// IP Input form
-	ipForm := createIPForm(content)
-	content.AddItem(ipForm, 0, 1, true)
+	// Show discovery screen instead of IP form
+	showDiscoveryScreen()
 
 	app.SetRoot(flex, true).EnableMouse(true)
 	if err := app.Run(); err != nil {
@@ -106,7 +81,7 @@ func updateStatus(view *tview.TextView) {
 	fmt.Fprintf(view, "Target IP: %s\n", status.ip)
 
 	if status.ip == "" {
-		fmt.Fprintf(view, "[yellow]Waiting for IP input...[white]\n")
+		fmt.Fprintf(view, "[yellow]Waiting for player selection...[white]\n")
 		return
 	}
 
@@ -121,7 +96,73 @@ func updateStatus(view *tview.TextView) {
 	}
 }
 
-func createIPForm(content *tview.Flex) *tview.Form {
+func showDiscoveryScreen() {
+	content.Clear()
+
+	// Create a flex to hold scanning status + list
+	scanFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+
+	statusText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	statusText.SetText("[yellow]Scanning for Panasonic players...[white]")
+
+	deviceList := tview.NewList()
+	deviceList.SetBorder(true).SetTitle(" Discovered Players ")
+
+	scanFlex.AddItem(statusText, 3, 0, false)
+	scanFlex.AddItem(deviceList, 0, 1, true)
+
+	content.AddItem(scanFlex, 0, 1, true)
+	app.SetFocus(deviceList)
+
+	// Run discovery in background
+	go func() {
+		devices, err := upnp.DiscoverPanasonic(3)
+
+		app.QueueUpdateDraw(func() {
+			deviceList.Clear()
+
+			if err != nil {
+				statusText.SetText(fmt.Sprintf("[red]Discovery error: %s[white]", err.Error()))
+			} else if len(devices) == 0 {
+				statusText.SetText("[yellow]No Panasonic players found.[white]")
+			} else {
+				statusText.SetText(fmt.Sprintf("[green]Found %d player(s)[white]", len(devices)))
+			}
+
+			// Add discovered devices
+			for _, dev := range devices {
+				ip := upnp.ExtractIP(dev.Location)
+				label := fmt.Sprintf("%s (%s)", dev.FriendlyName, dev.ModelName)
+				desc := fmt.Sprintf("IP: %s", ip)
+				capturedIP := ip
+				deviceList.AddItem(label, desc, 0, func() {
+					selectPlayer(capturedIP)
+				})
+			}
+
+			// Add manual IP entry option
+			deviceList.AddItem("Manual IP Entry", "Enter IP address manually", 'm', func() {
+				showManualIPForm()
+			})
+
+			// Add rescan option
+			deviceList.AddItem("Rescan", "Search for players again", 'r', func() {
+				showDiscoveryScreen()
+			})
+
+			// Add quit option
+			deviceList.AddItem("Quit", "Exit application", 'q', func() {
+				app.Stop()
+			})
+		})
+	}()
+}
+
+func showManualIPForm() {
+	content.Clear()
+
 	form := tview.NewForm()
 	form.AddInputField("IP Address", "", 20, nil, nil)
 	form.AddButton("Connect", func() {
@@ -130,25 +171,30 @@ func createIPForm(content *tview.Flex) *tview.Form {
 			showMessage("Error", "Please enter an IP address")
 			return
 		}
-		status.ip = ip
-
-		// Start player detection
-		go detectPlayer(ip)
-
-		// Show main menu
-		content.RemoveItem(form)
-		menu := createMainMenu(content)
-		content.AddItem(menu, 0, 1, true)
-		app.SetFocus(menu)
+		selectPlayer(ip)
 	})
-	form.AddButton("Quit", func() {
-		app.Stop()
+	form.AddButton("Back", func() {
+		showDiscoveryScreen()
 	})
 
-	return form
+	content.AddItem(form, 0, 1, true)
+	app.SetFocus(form)
 }
 
-func createMainMenu(content *tview.Flex) *tview.List {
+func selectPlayer(ip string) {
+	status.ip = ip
+	go detectPlayer(ip)
+	showMainMenu()
+}
+
+func showMainMenu() {
+	content.Clear()
+	menu := createMainMenu()
+	content.AddItem(menu, 0, 1, true)
+	app.SetFocus(menu)
+}
+
+func createMainMenu() *tview.List {
 	menu := tview.NewList().
 		AddItem("Execute Exploit", "Run the initial exploit", 'e', func() {
 			go executeExploit()
@@ -168,11 +214,11 @@ func createMainMenu(content *tview.Flex) *tview.List {
 		AddItem("Update Player", "Install player update", 'p', func() {
 			showUpdateMenu()
 		}).
-		AddItem("Back", "Return to IP input", 'q', func() {
-			content.Clear()
-			form := createIPForm(content)
-			content.AddItem(form, 0, 1, true)
-			app.SetFocus(form)
+		AddItem("Back", "Return to player selection", 'q', func() {
+			status.ip = ""
+			status.detected = false
+			status.exploited = false
+			showDiscoveryScreen()
 		})
 
 	return menu
@@ -244,7 +290,135 @@ func createBackup() {
 }
 
 func showDiskMenu() {
-	// Implementation for disk creation menu
+	content.Clear()
+
+	statusText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	statusText.SetText("[yellow]Listing USB disks...[white]")
+
+	diskList := tview.NewList()
+	diskList.SetBorder(true).SetTitle(" USB Disks ")
+
+	diskFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	diskFlex.AddItem(statusText, 3, 0, false)
+	diskFlex.AddItem(diskList, 0, 1, true)
+
+	content.AddItem(diskFlex, 0, 1, true)
+	app.SetFocus(diskList)
+
+	go func() {
+		mgr := disk.NewDiskManager()
+		disks, err := mgr.ListUSBDisks()
+
+		app.QueueUpdateDraw(func() {
+			diskList.Clear()
+
+			if err != nil {
+				statusText.SetText(fmt.Sprintf("[red]Error: %s[white]", err.Error()))
+			} else if len(disks) == 0 {
+				statusText.SetText("[yellow]No USB disks found.[white]")
+			} else {
+				statusText.SetText(fmt.Sprintf("[green]Found %d USB disk(s)[white]", len(disks)))
+			}
+
+			for _, d := range disks {
+				label := fmt.Sprintf("%s (%s) - %s", d.Name, d.Model, d.Size)
+				desc := d.DevicePath
+				capturedDisk := d
+				diskList.AddItem(label, desc, 0, func() {
+					confirmDiskWrite(capturedDisk)
+				})
+			}
+
+			diskList.AddItem("Refresh", "Scan for disks again", 'r', func() {
+				showDiskMenu()
+			})
+
+			diskList.AddItem("Back", "Return to main menu", 'q', func() {
+				showMainMenu()
+			})
+		})
+	}()
+}
+
+func confirmDiskWrite(d disk.Disk) {
+	modal := tview.NewModal()
+	modal.SetText(fmt.Sprintf("WARNING: All data on %s (%s) will be erased.\n\nContinue?", d.Name, d.DevicePath))
+	modal.AddButtons([]string{"Yes", "No"})
+	modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+		if buttonLabel == "Yes" {
+			executeDiskWrite(d)
+		} else {
+			app.SetRoot(flex, true)
+			showDiskMenu()
+		}
+	})
+
+	app.SetRoot(modal, false)
+}
+
+func executeDiskWrite(d disk.Disk) {
+	app.SetRoot(flex, true)
+	content.Clear()
+
+	progressView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true)
+	progressView.SetBorder(true).SetTitle(" Disk Write Progress ")
+
+	content.AddItem(progressView, 0, 1, false)
+
+	go func() {
+		mgr := disk.NewDiskManager()
+
+		addLine := func(text string) {
+			app.QueueUpdateDraw(func() {
+				fmt.Fprintf(progressView, "%s\n", text)
+				progressView.ScrollToEnd()
+			})
+		}
+
+		addLine("[yellow]Formatting disk...[white]")
+		if err := mgr.Format(d); err != nil {
+			addLine(fmt.Sprintf("[red]Format failed: %s[white]", err.Error()))
+			addLine("\nPress any key to return.")
+			app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+				app.SetInputCapture(nil)
+				app.QueueUpdateDraw(func() { showMainMenu() })
+				return nil
+			})
+			return
+		}
+		addLine("[green]Format complete[white]")
+
+		addLine("[yellow]Writing image...[white]")
+		progress := func(msg string) {
+			app.QueueUpdateDraw(func() {
+				fmt.Fprintf(progressView, "\r%s", msg)
+			})
+		}
+
+		imageFile := "res/drive.img.gz"
+		if err := mgr.WriteImage(d, imageFile, progress); err != nil {
+			addLine(fmt.Sprintf("\n[red]Write failed: %s[white]", err.Error()))
+			addLine("\nPress any key to return.")
+			app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+				app.SetInputCapture(nil)
+				app.QueueUpdateDraw(func() { showMainMenu() })
+				return nil
+			})
+			return
+		}
+
+		addLine("\n[green]Disk write complete![white]")
+		addLine("\nPress any key to return.")
+		app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			app.SetInputCapture(nil)
+			app.QueueUpdateDraw(func() { showMainMenu() })
+			return nil
+		})
+	}()
 }
 
 func extractFPCKeys() {
@@ -262,7 +436,7 @@ func extractFPCKeys() {
 
 		// First, download libfmupre.so from device
 		showMessage("Info", "Downloading libfmupre.so from device...")
-		
+
 		// Patch it locally
 		if err := keydump.PatchLibrary("libfmupre.so", "libfmupre_patched.so"); err != nil {
 			return fmt.Errorf("failed to patch library: %w", err)
@@ -279,7 +453,7 @@ func extractFPCKeys() {
 		showMessage("Success", msg)
 
 		// Save to file
-		ioutil.WriteFile("fpc_keys.txt", 
+		os.WriteFile("fpc_keys.txt",
 			[]byte(fmt.Sprintf("K1=%x\nK2=%x\n", k1, k2)), 0644)
 
 		return nil

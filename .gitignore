@@ -21,3 +21,8 @@ vendor/
 .vscode/
 *.swp
 *.swo
+
+# Firmware files (copyrighted)
+*.FRM
+*.frm
+/disk/

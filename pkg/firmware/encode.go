@@ -88,7 +88,8 @@ func (e *Encoder) EncodeFile(inputDir, outputPath, templatePath string) error {
 					fmt.Printf("  Encoding MAIN.bin (%d bytes raw)...\n", len(rawData))
 				}
 
-				encodedData, err := e.EncodeMainPartition(rawData)
+				metadataPath := filepath.Join(inputDir, "MAIN_metadata.json")
+				encodedData, err := e.EncodeMainPartition(rawData, metadataPath)
 				if err != nil {
 					fmt.Printf("Warning: failed to encode MAIN: %v\n", err)
 					continue
@@ -218,20 +219,3 @@ func (e *Encoder) parsePartitionTable(modHdr []byte) ([]PartitionInfo, error) {
 	return partitions, nil
 }
 
-// EncodeSimple creates a firmware by re-encrypting modified decrypted data
-// This is for when you have a decrypted+modified firmware blob
-func (e *Encoder) EncodeSimple(decryptedPath, outputPath string) error {
-	// Read decrypted data
-	data, err := os.ReadFile(decryptedPath)
-	if err != nil {
-		return err
-	}
-
-	// AES encrypt
-	encrypted, err := AESEncryptCBC(data)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(outputPath, encrypted, 0644)
-}

@@ -124,7 +124,7 @@ func (b *Builder) collectEntries(dirPath string) ([]entryInfo, error) {
 		entry := entryInfo{
 			name: name,
 			path: fullPath,
-			mode: uint16(info.Mode().Perm()) | uint16(info.Mode()&fs.ModeType)>>16,
+			mode: uint16(info.Mode().Perm()) | uint16(uint32(info.Mode()&fs.ModeType)>>16),
 			uid:  0, // Could extract from syscall if needed
 			gid:  0,
 		}
