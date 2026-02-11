@@ -75,6 +75,15 @@ func TestLZSSRoundtripWithSize(t *testing.T) {
 	}
 }
 
+func BenchmarkCompressLZSS_4KB(b *testing.B) {
+	data := makeTestData(4 * 1024)
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		CompressLZSS(data)
+	}
+}
+
 func BenchmarkCompressLZSS_64KB(b *testing.B) {
 	data := makeTestData(64 * 1024)
 	b.SetBytes(int64(len(data)))

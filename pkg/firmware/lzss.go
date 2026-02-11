@@ -53,14 +53,18 @@ func CompressLZSS(src []byte) []byte {
 		return []byte{}
 	}
 
-	ring := make([]byte, LZSSRingSize)
-	ringPos := LZSSRingInit
+	const (
+		hashSize    = 65536
+		prevSize    = 1 << 16
+		prevMask    = prevSize - 1
+		maxChain    = 128 // Hash chain walk limit
+		maxMatch    = 18  // Maximum LZSS match length
+		windowSize  = 4096
+		ringInitVal = LZSSRingInit
+	)
 
-	// Hash table for fast matching
-	// head[hash] = most recent source position with this hash
-	// prev[si & 0x7fff] = previous source position with same hash
-	head := make([]int, 65536)
-	prev := make([]int, 32768)
+	head := make([]int, hashSize)
+	prev := make([]int, prevSize)
 	for i := range head {
 		head[i] = -1
 	}
@@ -69,15 +73,17 @@ func CompressLZSS(src []byte) []byte {
 	dst := make([]byte, 0, len(src)+len(src)/8+16)
 
 	si := 0
-	for si < len(src) {
+	srcLen := len(src)
+
+	for si < srcLen {
 		flagPos := len(dst)
 		dst = append(dst, 0) // Placeholder for flags
 		var flags byte
 
-		for bit := 0; bit < 8 && si < len(src); bit++ {
-			// Compute hash for current position
+		for bit := 0; bit < 8 && si < srcLen; bit++ {
+			// Compute 2-byte hash for current position
 			var hash uint16
-			if si+1 < len(src) {
+			if si+1 < srcLen {
 				hash = uint16(src[si]) | (uint16(src[si+1]) << 8)
 			} else {
 				hash = uint16(src[si])
@@ -87,70 +93,82 @@ func CompressLZSS(src []byte) []byte {
 			bestLen := 0
 			bestOff := 0
 
-			// Walk the hash chain (limit iterations to avoid O(n²))
+			// Compute max possible match at this position
+			maxLen := maxMatch
+			if si+maxLen > srcLen {
+				maxLen = srcLen - si
+			}
+
 			pos := head[hash]
-			maxChain := 4096
-			for pos >= 0 && maxChain > 0 {
-				// Position must be within ring buffer distance
+			chain := maxChain
+			for pos >= 0 && chain > 0 {
 				dist := si - pos
-				if dist > 4096 || dist <= 0 {
+				if dist > windowSize || dist <= 0 {
 					break
 				}
 
-				// Calculate what the ring offset would be for this source position
-				ringOff := (ringPos - dist) & 0xfff
-
-				// Try to extend match
+				// Try to extend match — split fast/slow paths to avoid modulo
 				matchLen := 0
-				maxLen := 18
-				if si+maxLen > len(src) {
-					maxLen = len(src) - si
-				}
-				// Match can exceed distance (repeated patterns decoded via ring wrap-around)
-				for matchLen < maxLen && src[pos+(matchLen%dist)] == src[si+matchLen] {
-					matchLen++
+				if dist >= maxLen {
+					// Fast path: match cannot wrap around (common case, no modulo)
+					for matchLen < maxLen && src[pos+matchLen] == src[si+matchLen] {
+						matchLen++
+					}
+				} else {
+					// Slow path: match may exceed distance (repeated patterns)
+					// First match up to dist bytes directly
+					limit := dist
+					if limit > maxLen {
+						limit = maxLen
+					}
+					for matchLen < limit && src[pos+matchLen] == src[si+matchLen] {
+						matchLen++
+					}
+					// If full pattern matched, continue comparing against the repeated pattern
+					if matchLen == dist {
+						for matchLen < maxLen && src[si+matchLen-dist] == src[si+matchLen] {
+							matchLen++
+						}
+					}
 				}
 
 				if matchLen > bestLen {
 					bestLen = matchLen
-					bestOff = ringOff
+					// Compute ring offset: ringPos = ringInitVal + si, so
+					// ring position for source pos = (ringInitVal + pos) & 0xfff
+					bestOff = (ringInitVal + pos) & 0xfff
+					if bestLen == maxMatch {
+						break // Can't do better
+					}
 				}
 
-				// Follow chain
-				pos = prev[pos&0x7fff]
-				maxChain--
+				pos = prev[pos&prevMask]
+				chain--
 			}
 
 			// Update hash chain for current position
-			prev[si&0x7fff] = head[hash]
+			prev[si&prevMask] = head[hash]
 			head[hash] = si
 
 			if bestLen >= 3 {
 				// Output back-reference
-				dst = append(dst, byte(bestOff&0xff))
-				dst = append(dst, byte(((bestOff>>4)&0xf0)|((bestLen-3)&0x0f)))
+				dst = append(dst, byte(bestOff&0xff),
+					byte(((bestOff>>4)&0xf0)|((bestLen-3)&0x0f)))
 
-				// Update ring buffer and advance
-				for j := 0; j < bestLen; j++ {
-					ring[ringPos&0xfff] = src[si]
-					ringPos++
-					si++
-
-					// Update hash chain for skipped positions
-					if j > 0 && si < len(src) {
-						if si+1 < len(src) {
-							h := uint16(src[si]) | (uint16(src[si+1]) << 8)
-							prev[si&0x7fff] = head[h]
-							head[h] = si
-						}
+				// Advance source and update hash chains for skipped positions
+				si++
+				for j := 1; j < bestLen; j++ {
+					if si+1 < srcLen {
+						h := uint16(src[si]) | (uint16(src[si+1]) << 8)
+						prev[si&prevMask] = head[h]
+						head[h] = si
 					}
+					si++
 				}
 			} else {
 				// Output literal byte
 				flags |= 1 << bit
 				dst = append(dst, src[si])
-				ring[ringPos&0xfff] = src[si]
-				ringPos++
 				si++
 			}
 		}
