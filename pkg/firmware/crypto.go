@@ -178,12 +178,3 @@ func AESEncryptCBC(plaintext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// DecryptFirmware performs full AES decryption of firmware data
-func DecryptFirmware(data []byte) ([]byte, error) {
-	return AESDecryptCBC(data)
-}
-
-// EncryptFirmware performs full AES encryption of firmware data
-func EncryptFirmware(data []byte) ([]byte, error) {
-	return AESEncryptCBC(data)
-}

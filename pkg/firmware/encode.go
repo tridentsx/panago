@@ -3,6 +3,7 @@ package firmware
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/adler32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,8 +65,11 @@ func (e *Encoder) EncodeFile(inputDir, outputPath, templatePath string) error {
 	output := make([]byte, len(decrypted))
 	copy(output, decrypted)
 
+	// Track which module entries need checksum updates (entry index → true)
+	modifiedEntries := make(map[int]bool)
+
 	// Replace partition data with modified versions where available
-	for _, p := range partitions {
+	for i, p := range partitions {
 		if p.Offset == 0 || p.Size == 0 {
 			continue
 		}
@@ -111,9 +115,11 @@ func (e *Encoder) EncodeFile(inputDir, outputPath, templatePath string) error {
 					encodedData = append(encodedData, padding...)
 				}
 
-				// Copy to output
+				// Copy to output at the actual data position (offset + HeaderSize)
 				copy(output[p.Offset:], encodedData)
 
+				// MAIN dataCk (module entry[36:40]) is preserved from template — PROG does
+				// not verify it for CompType=2 (LZSS) firmware; per-entry Adler32 handles integrity.
 				if e.verbose {
 					fmt.Printf("  Replaced MAIN (%d bytes encoded)\n", len(encodedData))
 				}
@@ -144,12 +150,33 @@ func (e *Encoder) EncodeFile(inputDir, outputPath, templatePath string) error {
 			// Feistel encrypt the replacement data
 			e.feistel.Encrypt(newData)
 
-			// Copy to output
+			// Copy to output at the partition offset
 			copy(output[p.Offset:], newData)
+
+			// Mark entry for checksum update (i is 0-based in partitions slice,
+			// but module entries start at index 1 in the header)
+			modifiedEntries[i] = true
 
 			if e.verbose {
 				fmt.Printf("  Replaced %s (%d bytes)\n", p.Name, len(newData))
 			}
+		}
+	}
+
+	// Update dataCk and EntryCk for modified non-MAIN partitions
+	for i, p := range partitions {
+		if !modifiedEntries[i] {
+			continue
+		}
+		// Compute dataCk from the output buffer
+		dataCk := e.computeDataChecksum(output, p.Offset, p.Size)
+
+		// Update module entry (entry index = i+1 because entry 0 is "$PaT" marker)
+		entryIdx := i + 1
+		updateModuleEntry(modHdr, entryIdx, dataCk)
+
+		if e.verbose {
+			fmt.Printf("  Updated %s dataCk=0x%08X\n", p.Name, dataCk)
 		}
 	}
 
@@ -217,5 +244,28 @@ func (e *Encoder) parsePartitionTable(modHdr []byte) ([]PartitionInfo, error) {
 	}
 
 	return partitions, nil
+}
+
+// computeDataChecksum computes the dataCk for a non-MAIN partition.
+// dataCk = Adler32(FeistelDecrypt(output[offset + HeaderSize : offset + HeaderSize + size]))
+// The partition offset in module entries is relative to the file header start,
+// so the actual partition data begins HeaderSize (0x30) bytes later.
+func (e *Encoder) computeDataChecksum(output []byte, offset, size uint32) uint32 {
+	actualOff := offset + uint32(HeaderSize)
+	data := make([]byte, size)
+	copy(data, output[actualOff:actualOff+size])
+	fc := NewFeistelCipher()
+	fc.Decrypt(data)
+	return adler32.Checksum(data)
+}
+
+// updateModuleEntry updates the dataCk and EntryCk fields in a module entry.
+// EntryCk = Adler32(entry[0:44]).
+func updateModuleEntry(modHdr []byte, entryIndex int, dataCk uint32) {
+	off := entryIndex * ModuleEntrySize
+	binary.LittleEndian.PutUint32(modHdr[off+36:off+40], dataCk)
+	// Recompute EntryCk = Adler32 of first 44 bytes
+	entryCk := adler32.Checksum(modHdr[off : off+44])
+	binary.LittleEndian.PutUint32(modHdr[off+44:off+48], entryCk)
 }
 

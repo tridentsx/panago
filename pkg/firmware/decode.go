@@ -191,11 +191,11 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 	// Parse list header
 	listHdr := data[MainListHeaderOff : MainListHeaderOff+MainListHeaderLen]
 	hdr := MainListHeader{
-		Checksum:   binary.LittleEndian.Uint32(listHdr[0:4]),
-		Unknown:    binary.LittleEndian.Uint32(listHdr[4:8]),
-		ListSize:   binary.LittleEndian.Uint32(listHdr[8:12]),
-		DecompSize: binary.LittleEndian.Uint32(listHdr[12:16]),
-		Unknown2:   binary.LittleEndian.Uint32(listHdr[16:20]),
+		Checksum:      binary.LittleEndian.Uint32(listHdr[0:4]),
+		FormatVersion: binary.LittleEndian.Uint32(listHdr[4:8]),
+		ListSize:      binary.LittleEndian.Uint32(listHdr[8:12]),
+		DecompSize:    binary.LittleEndian.Uint32(listHdr[12:16]),
+		CompType:      binary.LittleEndian.Uint32(listHdr[16:20]),
 	}
 
 	entryCount := (hdr.ListSize - 20) / 8
@@ -320,8 +320,8 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 	// Save lean MAIN_metadata.json
 	meta := MainPartitionMetadata{
 		FirstHeader:    hex.EncodeToString(headerPart),
-		ListHeaderUnk:  hdr.Unknown,
-		ListHeaderUnk2: hdr.Unknown2,
+		FormatVersion:  hdr.FormatVersion,
+		ListHeaderCompType: hdr.CompType,
 		EntrySignature: hex.EncodeToString(entrySignature),
 		CompType:       compType,
 		ChunkSize:      chunkSize,

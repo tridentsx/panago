@@ -5,7 +5,7 @@ Golang toolkit for Panasonic DP-UB9000 (and similar) UHD Blu-ray player research
 ## Features
 
 - **Firmware Tools** - Decode, encode, and analyze Panasonic firmware files (PANAEUSB.FRM)
-- **Cramfs Tools** - Extract and create cramfs filesystem images used by Panasonic devices
+- **Cramfs Tools** - Extract and create cramfs filesystem images
 - **Romfs Tools** - Extract and create romfs filesystem images
 - **Device Discovery** - Find Panasonic players on the network via SSDP
 - **USB Disk Management** - List, format, and write disk images to USB drives
@@ -29,7 +29,7 @@ Download from the [Releases](https://github.com/tridentsx/panago/releases) page.
 
 The project builds two binaries:
 
-- **`panago`** - TUI (terminal UI) application for interactive device management
+- **`panago`** - TUI (terminal UI) for interactive device management
 - **`panago-cli`** - Command-line interface with all tools as subcommands
 
 ## Usage
@@ -40,6 +40,50 @@ The project builds two binaries:
 panago-cli [command] [subcommand] [options]
 ```
 
+---
+
+### Simple Workflow (Recommended)
+
+Extract everything, modify files, rebuild in three steps:
+
+```bash
+# 1. Extract firmware and all filesystems
+panago-cli extract PANAEUSB.FRM ./workspace/
+
+# 2. Modify files in the workspace
+#    ./workspace/fma5/  = root filesystem (cramfs)
+#    ./workspace/fma6/  = data partition  (romfs)
+#    ./workspace/fma7/  = app filesystem  (cramfs)
+
+# 3. Rebuild and repack firmware
+panago-cli build ./workspace/ PANAEUSB_modified.FRM PANAEUSB.FRM
+```
+
+Workspace structure after extraction:
+
+```
+workspace/
+├── PROG_0.00.bin          (boot program)
+├── MINI_7.74.bin          (mini partition)
+├── DRV1_D110.bin          (driver partition 1)
+├── DRV1_V304.bin          (driver partition 2)
+├── BUCD_000.bin           (BD certification data)
+├── MAIN_metadata.json     (MAIN encoding parameters - do not edit)
+├── fma4.bin               (kernel - kept as binary)
+├── fma5/                  (root filesystem - editable)
+│   ├── sbin/init
+│   ├── etc/
+│   └── ...
+├── fma6/                  (data partition - editable)
+│   ├── local/fonts/
+│   └── ...
+└── fma7/                  (app filesystem - editable)
+    ├── bin/
+    └── ...
+```
+
+---
+
 ### Firmware Tools
 
 #### Show Firmware Information
@@ -48,7 +92,6 @@ panago-cli [command] [subcommand] [options]
 panago-cli firmware info PANAEUSB.FRM
 ```
 
-Output:
 ```
 Firmware: PANAEUSB.FRM
 Size: 184193072 bytes
@@ -64,18 +107,18 @@ DRV1     V304        182677504      1122688
 BUCD     000         183803904       389120
 ```
 
-#### Extract Firmware
+#### Extract Firmware Partitions
 
 ```bash
 panago-cli firmware decode PANAEUSB.FRM ./extracted/
 ```
 
-This extracts all partitions:
+Extracts all partitions:
 - `PROG_0.00.bin` - Boot program
-- `MAIN.bin` - Main filesystem (concatenated cramfs images)
+- `MAIN.bin` - Main data (concatenated kernel + filesystems)
+- `MAIN_metadata.json` - MAIN encoding parameters (required for re-encoding)
 - `MINI_7.74.bin` - Mini partition
-- `DRV1_D110.bin` - Driver partition 1
-- `DRV1_V304.bin` - Driver partition 2
+- `DRV1_D110.bin`, `DRV1_V304.bin` - Driver partitions
 - `BUCD_000.bin` - BD certification data
 
 #### Rebuild Firmware
@@ -84,17 +127,16 @@ This extracts all partitions:
 panago-cli firmware encode ./modified/ output.FRM original.FRM
 ```
 
-Uses the original firmware as a template and replaces partitions with modified versions from the input directory. Partition files must match the naming convention `NAME_VERSION.bin`.
+Uses the original firmware as a structural template. Non-MAIN partitions must match
+the naming convention `NAME_VERSION.bin` and the exact original size. The MAIN
+partition is re-encoded using `MAIN.bin` + `MAIN_metadata.json`.
 
 #### Split MAIN.bin
-
-MAIN.bin contains concatenated sub-images. Split them for individual modification:
 
 ```bash
 panago-cli firmware split-main MAIN.bin ./main_parts/
 ```
 
-Output:
 ```
 Splitting MAIN.bin...
   fma4: offset=0x0, size=6553600 (raw)
@@ -103,7 +145,7 @@ Splitting MAIN.bin...
   fma7: offset=0x45c0000, size=111411200 (cramfs)
 ```
 
-The sub-images are:
+Sub-images:
 - `fma4.bin` - Kernel (raw binary)
 - `fma5.bin` - Root filesystem (cramfs)
 - `fma6.bin` - Data partition (romfs)
@@ -111,11 +153,11 @@ The sub-images are:
 
 #### Combine MAIN.bin
 
-After modifying sub-images, combine them back:
-
 ```bash
 panago-cli firmware combine-main ./main_parts/ MAIN_modified.bin
 ```
+
+Concatenates `fma4.bin` through `fma7.bin` in order.
 
 #### Test Crypto Implementations
 
@@ -123,17 +165,18 @@ panago-cli firmware combine-main ./main_parts/ MAIN_modified.bin
 panago-cli firmware test
 ```
 
-Verifies AES-128-CBC, Feistel cipher, and LZSS compression round-trips.
+Verifies Feistel cipher, AES-128-CBC, and LZSS compression round-trips.
+
+---
 
 ### Cramfs Tools
 
-#### List Files in Cramfs Image
+#### List Files
 
 ```bash
 panago-cli cramfs list fma5.bin
 ```
 
-Output:
 ```
 d0755     0 usr
 d0755     0 tmp
@@ -144,29 +187,24 @@ l0777     3 var -> tmp
 ...
 ```
 
-#### Extract Cramfs Image
+#### Extract
 
 ```bash
 panago-cli cramfs extract fma5.bin ./rootfs/
 ```
 
-Extracts all files, directories, and symlinks preserving permissions.
-
-#### Create Cramfs Image
+#### Create
 
 ```bash
 panago-cli cramfs create ./rootfs/ new_fma5.bin
 ```
 
-Creates a cramfs image compatible with Panasonic's "old cramfs format" (flags=0).
-
-#### Show Cramfs Information
+#### Info
 
 ```bash
 panago-cli cramfs info fma5.bin
 ```
 
-Output:
 ```
 Cramfs image: fma5.bin
 Files: 171
@@ -175,35 +213,34 @@ Symlinks: 156
 Total uncompressed size: 38651830 bytes
 ```
 
+---
+
 ### Romfs Tools
 
-Romfs is used for the fma6 data partition. No root access required.
-
-#### List Files in Romfs Image
+#### List Files
 
 ```bash
 panago-cli romfs list fma6.bin
 ```
 
-#### Extract Romfs Image
+#### Extract
 
 ```bash
 panago-cli romfs extract fma6.bin ./data/
 ```
 
-#### Create Romfs Image
+#### Create
 
 ```bash
 panago-cli romfs create ./data/ new_fma6.bin
 ```
 
-#### Show Romfs Information
+#### Info
 
 ```bash
 panago-cli romfs info fma6.bin
 ```
 
-Output:
 ```
 Romfs image: fma6.bin
 Volume name: rom 665d5f54
@@ -214,17 +251,19 @@ Symlinks: 35
 Total content size: 18601986 bytes
 ```
 
+---
+
 ### Device Discovery
 
-Scan the local network for UPnP devices:
-
 ```bash
-# Discover all UPnP devices
+# Discover all UPnP devices on the network
 panago-cli discover
 
 # Show only Panasonic players
 panago-cli discover --panasonic
 ```
+
+---
 
 ### USB Disk Management
 
@@ -232,102 +271,135 @@ panago-cli discover --panasonic
 # List available USB disks
 panago-cli disk list
 
-# Format and write a disk image to a USB device
+# Write a disk image to a USB device
 panago-cli disk write /dev/sdX drive.img.gz
 ```
 
-### TUI Application
+---
 
-The graphical terminal interface for device management:
+### TUI Application
 
 ```bash
 ./bin/panago
 ```
 
-The TUI automatically scans for Panasonic players on startup via SSDP, with an option for manual IP entry. It includes device exploitation, shell access, FPC key extraction, backup, USB disk creation, and firmware updates.
+The TUI scans for Panasonic players on startup via SSDP, with manual IP entry as
+fallback. Features include device shell access, FPC key extraction, backup, USB disk
+creation, and firmware updates.
 
-## Firmware Modification Workflow
-
-### Simple Workflow (Recommended)
-
-The easiest way to modify firmware using just two commands:
-
-```bash
-# 1. Extract everything
-panago-cli extract PANAEUSB.FRM ./workspace/
-
-# 2. Modify files in the workspace
-#    - ./workspace/fma5/ = root filesystem (contains /sbin/init, /etc/, etc.)
-#    - ./workspace/fma6/ = data partition (fonts, pixmaps, etc.)
-#    - ./workspace/fma7/ = app filesystem (application binaries, libraries)
-
-# 3. Build new firmware
-panago-cli build ./workspace/ PANAEUSB_modified.FRM PANAEUSB.FRM
-```
-
-The workspace structure after extraction:
-```
-workspace/
-├── PROG_*.bin, MINI_*.bin, DRV1_*.bin, BUCD_*.bin  (other partitions)
-├── fma4.bin      (kernel - kept as binary)
-├── fma5/         (root filesystem - editable)
-│   ├── sbin/init
-│   ├── etc/
-│   └── ...
-├── fma6/         (data partition - editable)
-│   ├── local/fonts/
-│   └── ...
-└── fma7/         (app filesystem - editable)
-    ├── bin/
-    ├── dtvrec/
-    └── ...
-```
-
-### Advanced Workflow
-
-For more control, use individual commands:
-
-```bash
-# Extract firmware partitions
-panago-cli firmware decode PANAEUSB.FRM ./extracted/
-
-# Split MAIN.bin into sub-images
-panago-cli firmware split-main ./extracted/MAIN.bin ./main_parts/
-
-# Extract specific filesystem
-panago-cli cramfs extract ./main_parts/fma5.bin ./rootfs/
-panago-cli romfs extract ./main_parts/fma6.bin ./data/
-panago-cli cramfs extract ./main_parts/fma7.bin ./appfs/
-
-# Make modifications...
-
-# Rebuild filesystems
-panago-cli cramfs create ./rootfs/ ./main_parts/fma5.bin
-panago-cli romfs create ./data/ ./main_parts/fma6.bin
-panago-cli cramfs create ./appfs/ ./main_parts/fma7.bin
-
-# Combine and encode
-panago-cli firmware combine-main ./main_parts/ ./extracted/MAIN.bin
-panago-cli firmware encode ./extracted/ PANAEUSB_modified.FRM PANAEUSB.FRM
-```
+---
 
 ## Technical Details
 
 ### Firmware Encryption
 
-Panasonic firmware uses a two-layer encryption scheme:
+Panasonic firmware uses a two-layer encryption scheme applied in sequence:
 
-1. **AES-128-CBC** - Applied to the entire file (outer layer)
-2. **Custom Feistel Cipher** - 16-round, 8-byte blocks with custom S-box
-   - Applied to header and partition table
-   - Applied to first/last 5KB of each MAIN sub-entry
+1. **AES-128-CBC** — outer layer, applied to the entire file
+2. **Custom Feistel cipher** — 16-round, 8-byte block cipher with a custom S-box
+   - Applied to the 48-byte file header and the 8 KB module header block
+   - Applied to the first and last 5 KB (or 10 KB for large firmwares) of each MAIN sub-entry
+
+### Firmware Structure
+
+```
+File (AES-CBC encrypted)
+└── 0x00: File header (48 bytes, Feistel encrypted)
+          [0:4]   = 0x30 (self-size)
+          [4:8]   = payload size (file_size - 48)
+          [32:44] = "PANASONIC\0\0\0" (product identifier)
+          [44:48] = Unix timestamp (firmware build date)
+└── 0x30: Module header block (8 KB, Feistel encrypted)
+          Entry 0: "$PaT" marker
+          Entry 1..N: partition descriptors (48 bytes each)
+            [0:4]   Name      (e.g. "MAIN", "PROG")
+            [4:8]   Version   (e.g. "3820", "0.00")
+            [12:16] Offset    (partition start in file)
+            [24:26] TypeFlags (low byte = 0x4D; high: 0=standard, 1=system)
+            [32:36] Size      (partition size in bytes)
+            [36:40] DataCk    (Adler32 of Feistel-decrypted partition data)
+            [40:44] RingBufSize (0 for most; 0x02000000 for MAIN)
+            [44:48] EntryCk   (Adler32 of entry bytes [0:44])
+└── Partitions: PROG, MAIN, MINI, DRV1, DRV1, BUCD
+```
+
+### MAIN Partition Structure
+
+The MAIN partition contains a sub-entry list with individually compressed chunks:
+
+```
+MAIN partition
+└── 0x00: First header (48 bytes, Feistel encrypted)
+└── 0x30: List header (20 bytes, plaintext)
+          [0:4]   Checksum      (sum of LE uint32 words from bytes [4:])
+          [4:8]   FormatVersion (always 1)
+          [8:12]  ListSize      (total list header + entry records size)
+          [12:16] DecompSize    (total decompressed size)
+          [16:20] CompType      (2 = LZSS, 0 = uncompressed)
+└── Entry records (8 bytes each):
+          [0:4]   Size      (entry blob size)
+          [4:8]   Checksum  (Adler32 of Feistel-encrypted entry blob)
+└── Entry blobs (Feistel encrypted at boundaries):
+    Each entry:
+          [0:14]  Signature     (e.g. "EXTRHEADDRVD  ")
+          [14:16] CompType      (2 = raw LZSS)
+          [16:20] DecompSize    (uncompressed chunk size)
+          [20:24] DestAddr      (load address, 0)
+          [24:28] CompSize      (compressed data size)
+          [28:32] Slack         (BufferConstant - FooterOffset)
+          [32:36] FooterOffset  (64 + align4(CompSize))
+          [36:40] BaseAddr      (0)
+          [40:44] HdrChecksum   (Adler32 of every 16th byte of decompressed data)
+          [44]    ChecksumFlag  (0x10)
+          [64:]   LZSS compressed data
+          [FooterOffset:] "EXTRFOOT" (8 bytes)
+```
+
+### LZSS Compression
+
+The MAIN sub-entries use a variant of the classic Haruhiko Okumura LZSS algorithm:
+
+- 4096-byte ring buffer, initialized to `0x00`
+- Initial write position: `0xFEE` (4078)
+- Offsets: 12 bits; lengths: 4 bits with bias +3 (range 3–18 bytes)
+- Flag byte precedes each group of 8 tokens: `1` = literal, `0` = back-reference
+- Back-references to the pre-filled zero window (offsets `0x000`–`0xFED`) are valid
+  for the first 4096 output bytes — the compressor supports this via a direct zero-count
+  check before the hash chain walk
+
+### Checksum Summary
+
+| Location | Algorithm |
+|---|---|
+| File header checksum (list header `[0:4]`) | Sum of LE uint32 words from bytes `[4:]` of list header + entry records |
+| List entry checksum (`entry_record[4:8]`) | Adler32 of Feistel-encrypted entry blob |
+| Entry header checksum (`entry_hdr[40:44]`) | Adler32 of every 16th byte of decompressed chunk data |
+| Module entry DataCk (`mod_entry[36:40]`) | Adler32 of Feistel-decrypted partition data (non-MAIN only) |
+| Module entry EntryCk (`mod_entry[44:48]`) | Adler32 of module entry bytes `[0:44]` |
 
 ### Cramfs Format
 
-Panasonic uses "old cramfs format" (flags=0, no FSID_VERSION_2):
-- 4KB block size
-- zlib compression with raw deflate (wbits=-14)
+Panasonic uses "old cramfs format" (flags=0, no `FSID_VERSION_2`):
+- 4 KB block size
+- zlib compression with raw deflate (`wbits=-14`)
 - Symlinks stored as compressed data (same as regular files)
+
+---
+
+## PTY / Interactive Shell
+
+The device has devpts kernel support but it is not mounted by default. To enable
+interactive shells (e.g. via dropbear SSH):
+
+```bash
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+```
+
+After this, PTY allocation works correctly and interactive terminal sessions are fully
+functional.
+
+---
 
 ## Build Instructions
 
@@ -350,47 +422,31 @@ make clean      # Clean build artifacts
 GOOS=linux GOARCH=arm go build -o panago-arm ./cmd/cli
 ```
 
-### Release
-
-Edit `.goreleaser.yaml` for build targets, then:
+### Releases
 
 ```bash
 # Local test build
 goreleaser release --snapshot --skip=publish --clean
 
-# Official release (triggers on git tag)
+# Tag and push to trigger official release
 git tag v0.1.2
 git push origin v0.1.2
 ```
 
-## Enabling Interactive Shell (PTY Support)
+### Integration Tests
 
-The device has devpts kernel support but it's not mounted by default. This is why interactive shells don't work out of the box.
-
-**To enable proper PTY/terminal support:**
-
-```bash
-mount -t devpts devpts /dev/pts
-```
-
-After this, you can:
-- Use interactive shells via SSH (dropbear)
-- Spawn proper terminal sessions
-- Run programs that require a TTY
-
-**Note:** The punch/shell workarounds in panago were created before discovering this. With devpts mounted, a simple dropbear SSH server provides full interactive access.
-
-## Quick Setup Script
-
-After gaining shell access, run:
+Firmware integration tests require a real firmware file. Set the path via environment
+variable or place the file at the default location:
 
 ```bash
-# Enable PTY support
-mkdir -p /dev/pts
-mount -t devpts devpts /dev/pts
+# Use a specific firmware file
+PANAGO_TEST_FIRMWARE=/path/to/PANAEUSB.FRM go test ./pkg/firmware/
 
-# Now interactive shells work
+# Run only unit tests (no firmware required)
+go test ./pkg/firmware/ -run TestLZSS
 ```
+
+---
 
 ## License
 

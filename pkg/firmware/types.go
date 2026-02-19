@@ -19,7 +19,7 @@ const (
 	MainEntryHeaderLen = 64
 )
 
-// Cryptographic keys extracted from libfmupre.so
+// Cryptographic keys for firmware AES and Feistel cipher
 var (
 	AESKey = [16]byte{
 		0x62, 0xa3, 0x9e, 0x1c, 0x55, 0x94, 0xae, 0x09,
@@ -35,7 +35,7 @@ var (
 	KeyScheduleSeed = [4]byte{0x35, 0x7d, 0xfb, 0x9a}
 )
 
-// Feistel cipher S-box
+// Feistel cipher S-box lookup table
 var SBox = [256]byte{
 	0x00, 0x01, 0xbb, 0x9c, 0x3f, 0x5e, 0xc7, 0x3e, 0x36, 0xa4, 0x92, 0x93, 0x38, 0x9b, 0x8d, 0x1a,
 	0x3c, 0x84, 0xf7, 0x2a, 0xcb, 0x3d, 0x70, 0xad, 0x30, 0xa2, 0xc1, 0x95, 0x03, 0x39, 0xa5, 0x0e,
@@ -55,28 +55,13 @@ var SBox = [256]byte{
 	0x62, 0xbf, 0x6b, 0xf9, 0xac, 0x46, 0xf0, 0x5c, 0x19, 0x7e, 0x68, 0xb5, 0xf1, 0x74, 0xc6, 0xe9,
 }
 
-// ModuleEntry represents a partition entry in the firmware header
-type ModuleEntry struct {
-	Name          [4]byte  // Partition name (e.g., "MAIN", "PROG")
-	Version       [4]byte  // Version string
-	Unknown1      uint32   // Unknown field
-	Offset        uint32   // Offset in firmware file
-	Platform      [8]byte  // Platform identifier
-	Unknown2      uint16   // Unknown field
-	ID            [6]byte  // Partition ID
-	Size          uint32   // Partition size
-	Checksum      uint32   // Data checksum
-	Unknown3      uint32   // Unknown field
-	EntryChecksum uint32   // Entry checksum
-}
-
 // MainListHeader is the header for the MAIN partition's sub-entry list
 type MainListHeader struct {
-	Checksum   uint32 // List checksum
-	Unknown    uint32 // Unknown field
-	ListSize   uint32 // Total size of list including this header
-	DecompSize uint32 // Decompressed size hint
-	Unknown2   uint32 // Unknown field
+	Checksum      uint32 // List checksum: Adler32(listHeader[4:ListSize])
+	FormatVersion uint32 // Always 1; list format version
+	ListSize      uint32 // Total size of list including this header
+	DecompSize    uint32 // Decompressed chunk size per entry (observed: 0x1000000 = 16MB)
+	CompType      uint32 // Compression type: 0=uncompressed (ByteSum check), 2=LZSS (per-entry Adler32 check)
 }
 
 // MainListEntry represents an entry in the MAIN partition list
@@ -101,12 +86,12 @@ type MainEntryHeader struct {
 }
 
 // MainPartitionMetadata stores structural parameters for the MAIN partition.
-// Most per-entry fields (FooterOff, Unknown, ListSize) are computed from CompSize
-// during encoding. Only values that can't be derived are stored here.
+// Most per-entry fields (FooterOff, ListSize) are computed from CompSize during
+// encoding. Only values that can't be derived are stored here.
 type MainPartitionMetadata struct {
-	FirstHeader    string `json:"first_header"`     // Hex-encoded 0x30-byte first header (date, version)
-	ListHeaderUnk  uint32 `json:"list_header_unk"`  // MainListHeader.Unknown field (observed: 1)
-	ListHeaderUnk2 uint32 `json:"list_header_unk2"` // MainListHeader.Unknown2 field (observed: 2)
+	FirstHeader        string `json:"first_header"`        // Hex-encoded 0x30-byte first header (payload size, "PANASONIC", build timestamp)
+	FormatVersion      uint32 `json:"format_version"`      // MainListHeader.FormatVersion (always 1)
+	ListHeaderCompType uint32 `json:"list_header_comp_type"` // MainListHeader.CompType: 0=uncompressed, 2=LZSS
 	EntrySignature string `json:"entry_signature"`  // Hex-encoded 14-byte entry signature
 	CompType       uint16 `json:"comp_type"`        // Compression type for all entries (observed: 2)
 	ChunkSize      uint32 `json:"chunk_size"`       // Decompressed chunk size (observed: 0x1000000 = 16MB)
@@ -130,8 +115,3 @@ type PartitionInfo struct {
 	Checksum uint32
 }
 
-// DecodedFirmware represents a fully decoded firmware image
-type DecodedFirmware struct {
-	Header     []byte            // Raw 0x30-byte header
-	Partitions map[string][]byte // Partition name -> decrypted data
-}

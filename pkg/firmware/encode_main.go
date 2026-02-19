@@ -199,10 +199,10 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 	entryList := make([]byte, listHeaderSize+entryListSize)
 
 	// List header: restore Unknown fields, set computed fields
-	binary.LittleEndian.PutUint32(entryList[4:8], meta.ListHeaderUnk)
+	binary.LittleEndian.PutUint32(entryList[4:8], meta.FormatVersion)
 	binary.LittleEndian.PutUint32(entryList[8:12], uint32(listHeaderSize+entryListSize))
 	binary.LittleEndian.PutUint32(entryList[12:16], uint32(len(rawData))) // DecompSize hint
-	binary.LittleEndian.PutUint32(entryList[16:20], meta.ListHeaderUnk2)
+	binary.LittleEndian.PutUint32(entryList[16:20], meta.ListHeaderCompType)
 
 	// Entry records: Size + Adler32 checksum of encrypted entry data
 	listOffset := listHeaderSize

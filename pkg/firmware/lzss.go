@@ -46,8 +46,16 @@ func DecompressLZSS(src []byte) []byte {
 	return dst
 }
 
-// CompressLZSS compresses data using LZSS algorithm
-// Uses hash chain for fast matching, compatible with Panasonic format
+// CompressLZSS compresses data using LZSS algorithm matching the Panasonic UniPhier spec:
+// 4096-byte ring, initial position 0xFEE, ring pre-filled with 0x00.
+//
+// Spec compliance: the initial zero window (ring offsets 0x000..0xFED) is made available
+// as back-reference targets via a direct zero-count check before the hash chain walk.
+// This avoids the collision issues of embedding virtual positions in the main hash chain.
+//
+// A virtual back-reference to ring offset vMin = max(0, si-18) is valid whenever
+// si < LZSSRingInit (= 4078), because ring position vMin is guaranteed to still hold its
+// initial 0x00 value at that point in decompression.
 func CompressLZSS(src []byte) []byte {
 	if len(src) == 0 {
 		return []byte{}
@@ -60,7 +68,11 @@ func CompressLZSS(src []byte) []byte {
 		maxChain    = 128 // Hash chain walk limit
 		maxMatch    = 18  // Maximum LZSS match length
 		windowSize  = 4096
-		ringInitVal = LZSSRingInit
+		ringInitVal = LZSSRingInit // 4078
+		// Slots before ringInitVal in the ring are the pre-filled zero region.
+		// A back-ref to ring offset r (r < ringInitVal) is valid while si ≤ r + (windowSize - ringInitVal).
+		// Equivalently: dist = si + ringInitVal - r ≤ windowSize → r ≥ si - (windowSize - ringInitVal).
+		initSlack = windowSize - ringInitVal // 18: zero-window back-refs available for first 4096 output bytes
 	)
 
 	head := make([]int, hashSize)
@@ -69,7 +81,6 @@ func CompressLZSS(src []byte) []byte {
 		head[i] = -1
 	}
 
-	// Estimate output size
 	dst := make([]byte, 0, len(src)+len(src)/8+16)
 
 	si := 0
@@ -77,7 +88,7 @@ func CompressLZSS(src []byte) []byte {
 
 	for si < srcLen {
 		flagPos := len(dst)
-		dst = append(dst, 0) // Placeholder for flags
+		dst = append(dst, 0)
 		var flags byte
 
 		for bit := 0; bit < 8 && si < srcLen; bit++ {
@@ -89,16 +100,35 @@ func CompressLZSS(src []byte) []byte {
 				hash = uint16(src[si])
 			}
 
-			// Find best match using hash chain
 			bestLen := 0
 			bestOff := 0
 
-			// Compute max possible match at this position
 			maxLen := maxMatch
 			if si+maxLen > srcLen {
 				maxLen = srcLen - si
 			}
 
+			// --- Spec compliance: check initial zero window ---
+			// Virtual ring positions 0..ringInitVal-1 are pre-filled with 0x00.
+			// The oldest valid virtual position at source index si is vMin = max(0, si - initSlack).
+			// dist = si + ringInitVal - vMin ≤ windowSize is guaranteed by construction.
+			if src[si] == 0 && si < windowSize {
+				vMin := si - initSlack
+				if vMin < 0 {
+					vMin = 0
+				}
+				// vMin is always < ringInitVal here (since si < windowSize = 4096 and initSlack = 18)
+				zeroLen := 0
+				for zeroLen < maxLen && src[si+zeroLen] == 0 {
+					zeroLen++
+				}
+				if zeroLen >= 3 {
+					bestLen = zeroLen
+					bestOff = vMin // ring offset equals the virtual position directly
+				}
+			}
+
+			// --- Hash chain walk for real (previously seen) positions ---
 			pos := head[hash]
 			chain := maxChain
 			for pos >= 0 && chain > 0 {
@@ -116,7 +146,6 @@ func CompressLZSS(src []byte) []byte {
 					}
 				} else {
 					// Slow path: match may exceed distance (repeated patterns)
-					// First match up to dist bytes directly
 					limit := dist
 					if limit > maxLen {
 						limit = maxLen
