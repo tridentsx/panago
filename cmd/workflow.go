@@ -156,11 +156,24 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	fma6Bin := filepath.Join(workspaceDir, "fma6.bin")
 	fma7Bin := filepath.Join(workspaceDir, "fma7.bin")
 
+	// Real firmware allocates each sub-partition a fixed size (matching the
+	// NAND flash partition table) larger than its actual content, padded
+	// with 0xFF. Reproducing that exactly requires knowing the template's
+	// real allocated sizes; if that lookup fails for any reason, fall back
+	// to unpadded output rather than failing the whole build.
+	templateSizes, sizeErr := firmware.GetTemplatePartitionSizes(templatePath)
+	if sizeErr != nil {
+		fmt.Printf("  Warning: failed to read template partition sizes (%v); output won't be padded to match the original's reserved space\n", sizeErr)
+	}
+
 	// Rebuild fma5 if directory exists
 	if info, err := os.Stat(fma5Dir); err == nil && info.IsDir() {
 		fmt.Printf("  Rebuilding fma5.bin (cramfs)...\n")
 		if err := cramfs.CompressToCramfs(fma5Dir, fma5Bin, cramfsCfg); err != nil {
 			return fmt.Errorf("failed to build fma5: %w", err)
+		}
+		if err := padToTemplateSize(fma5Bin, cramfs.BlockSize, templateSizes["fma5"]); err != nil {
+			return fmt.Errorf("failed to pad fma5: %w", err)
 		}
 	}
 
@@ -171,6 +184,9 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		if err := builder.BuildToFile(fma6Dir, fma6Bin); err != nil {
 			return fmt.Errorf("failed to build fma6: %w", err)
 		}
+		if err := padToTemplateSize(fma6Bin, 1024, templateSizes["fma6"]); err != nil {
+			return fmt.Errorf("failed to pad fma6: %w", err)
+		}
 	}
 
 	// Rebuild fma7 if directory exists
@@ -178,6 +194,9 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Rebuilding fma7.bin (cramfs)...\n")
 		if err := cramfs.CompressToCramfs(fma7Dir, fma7Bin, cramfsCfg); err != nil {
 			return fmt.Errorf("failed to build fma7: %w", err)
+		}
+		if err := padToTemplateSize(fma7Bin, cramfs.BlockSize, templateSizes["fma7"]); err != nil {
+			return fmt.Errorf("failed to pad fma7: %w", err)
 		}
 	}
 
@@ -199,4 +218,26 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Output: %s\n", outputPath)
 
 	return nil
+}
+
+// padToTemplateSize pads a rebuilt sub-partition file to match the
+// template's real allocated size (see firmware.PadPartitionToSize). A zero
+// targetSize means the size lookup wasn't available for this partition, so
+// the file is left untouched.
+func padToTemplateSize(path string, alignBoundary int, targetSize int64) error {
+	if targetSize == 0 {
+		return nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	padded, err := firmware.PadPartitionToSize(data, alignBoundary, targetSize)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, padded, 0644)
 }

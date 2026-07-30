@@ -45,6 +45,30 @@ func loadMainMetadata(path string) (*MainPartitionMetadata, error) {
 	return &meta, nil
 }
 
+// estimateBufferConstant computes a conservative (deliberately generous)
+// BufferConstant for a chunk whose decompressed size doesn't match any
+// value captured from a real firmware image.
+//
+// The real formula is unconfirmed: BufferConstant depends only on an
+// entry's decompressed size (not on how well it happens to compress — all
+// full 16MB chunks in one real firmware shared an identical BufferConstant
+// despite very different actual compressed sizes), and appears to scale
+// roughly proportionally, but the only two real data points available
+// (16777216 -> 18846664, ratio ~1.1233; 7864320 -> 8888808, ratio ~1.1303)
+// don't pin down an exact formula. Rather than guess low and risk an
+// under-sized allocation on the real device, this scales up using the
+// larger of the two observed ratios plus a further safety margin — trading
+// some unused reserved space for confidence that we never undershoot.
+//
+// If you have another real Panasonic UniPhier firmware image (different
+// version or model) with a different last-chunk size, extracting it adds a
+// third (decompSize, BufferConstant) data point, which may be enough to
+// replace this estimate with a confirmed formula.
+func estimateBufferConstant(decompSize uint32) uint32 {
+	const safetyRatio = 1.20
+	return uint32(float64(decompSize) * safetyRatio)
+}
+
 // align4 rounds up to next multiple of 4
 func align4(n uint32) uint32 {
 	return (n + 3) &^ 3
@@ -120,17 +144,42 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 	chunkSize := int(meta.ChunkSize)
 	entryCount := meta.EntryCount
 
-	// Determine decrypt size from total decompressed size
-	totalDecomp := uint32(entryCount) * meta.ChunkSize
+	// Determine decrypt size from the list header's DecompSize field
+	// (meta.ChunkSize) directly — matching decode.go's extractMainPartition,
+	// which bases this on hdr.DecompSize, NOT on entryCount*chunkSize. Using
+	// the total here (as a previous version of this function did) picks the
+	// wrong threshold whenever entryCount*chunkSize crosses 0x2000000 while
+	// the per-chunk size itself doesn't, silently encrypting the wrong
+	// number of boundary bytes.
 	decryptSize := 5120
-	if totalDecomp >= 0x2000000 {
+	if meta.ChunkSize >= 0x2000000 {
 		decryptSize = 10240
 	}
 
-	// Determine actual number of chunks (may be less than metadata if rawData is smaller)
-	actualCount := entryCount
-	if actualCount*chunkSize > len(rawData) {
-		actualCount = (len(rawData) + chunkSize - 1) / chunkSize
+	// Determine actual number of chunks from the real data size — NOT capped
+	// at the original entryCount. Capping here would silently truncate any
+	// modified content that needs MORE chunks than the original had (e.g.
+	// adding enough files to push MAIN.bin past the original's chunk
+	// capacity), dropping the tail with no error.
+	actualCount := (len(rawData) + chunkSize - 1) / chunkSize
+	if actualCount != entryCount && e.verbose {
+		fmt.Printf("  MAIN content needs %d chunks (template had %d)\n", actualCount, entryCount)
+	}
+
+	// BufferConstant scales with an entry's own decompressed size (confirmed
+	// against real firmware: the last, smaller partial chunk uses a
+	// proportionally smaller BufferConstant than the full-size chunks) —
+	// it is NOT simply "entry index i" once content is modified, since
+	// modding can add/remove chunks or resize the last one. Look it up by
+	// the chunk's actual decompressed size instead, so a chunk that keeps
+	// the standard chunk size (nearly always true except for the last
+	// chunk) always gets an exact, real BufferConstant regardless of how
+	// many chunks came before it.
+	bufferConstantBySize := make(map[uint32]uint32, len(meta.DecompSizes))
+	for i, sz := range meta.DecompSizes {
+		if i < len(meta.BufferConstants) {
+			bufferConstantBySize[sz] = meta.BufferConstants[i]
+		}
 	}
 
 	// Compress chunks in parallel using goroutines
@@ -144,8 +193,17 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 		}
 		chunk := rawData[start:end]
 
+		bufferConstant, exact := bufferConstantBySize[uint32(len(chunk))]
+		if !exact {
+			bufferConstant = estimateBufferConstant(uint32(len(chunk)))
+			fmt.Printf("  Warning: no captured BufferConstant for a %d-byte chunk (entry %d) — "+
+				"using an estimated value (%d), not verified against real firmware. "+
+				"This can happen when modified content changes the chunk layout.\n",
+				len(chunk), i, bufferConstant)
+		}
+
 		wg.Add(1)
-		go func(idx int, chunk []byte) {
+		go func(idx int, chunk []byte, bufferConstant uint32) {
 			defer wg.Done()
 
 			// Compress with LZSS (comp_type 2 and 0 both use raw LZSS)
@@ -153,7 +211,7 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 
 			// Build entry header with computed fields
 			header := buildEntryHeader(signature, meta.CompType, uint32(len(chunk)),
-				uint32(len(compData)), meta.BufferConstant, meta.ChecksumFlag)
+				uint32(len(compData)), bufferConstant, meta.ChecksumFlag)
 
 			// Compute and set HDR checksum (stride-16 Adler32 of decompressed data)
 			hdrCk := computeHdrChecksum(chunk)
@@ -178,7 +236,7 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 				data:       entryData,
 				decompSize: uint32(len(chunk)),
 			}
-		}(i, chunk)
+		}(i, chunk, bufferConstant)
 	}
 	wg.Wait()
 
@@ -201,7 +259,9 @@ func (e *Encoder) encodeMainPartitionWithMetadata(rawData []byte, meta *MainPart
 	// List header: restore Unknown fields, set computed fields
 	binary.LittleEndian.PutUint32(entryList[4:8], meta.FormatVersion)
 	binary.LittleEndian.PutUint32(entryList[8:12], uint32(listHeaderSize+entryListSize))
-	binary.LittleEndian.PutUint32(entryList[12:16], uint32(len(rawData))) // DecompSize hint
+	// DecompSize is the per-chunk decompressed size (e.g. 0x1000000 = 16MB),
+	// not the total raw data length — confirmed against real firmware.
+	binary.LittleEndian.PutUint32(entryList[12:16], meta.ChunkSize)
 	binary.LittleEndian.PutUint32(entryList[16:20], meta.ListHeaderCompType)
 
 	// Entry records: Size + Adler32 checksum of encrypted entry data
@@ -343,11 +403,11 @@ type mainEncodedEntry struct {
 	decompSize uint32
 }
 
-// calculateChecksum calculates a simple checksum
+// calculateChecksum computes the MAIN list header's checksum: Adler32 over
+// the list header (minus its own checksum field) plus the entry records —
+// confirmed against real firmware. Consistent with every other checksum in
+// this format (entry blobs, entry headers, module entries) also using
+// Adler32, rather than a plain word sum.
 func calculateChecksum(data []byte) uint32 {
-	var sum uint32
-	for i := 0; i+4 <= len(data); i += 4 {
-		sum += binary.LittleEndian.Uint32(data[i : i+4])
-	}
-	return sum
+	return adler32.Checksum(data)
 }

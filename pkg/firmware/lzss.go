@@ -46,163 +46,222 @@ func DecompressLZSS(src []byte) []byte {
 	return dst
 }
 
-// CompressLZSS compresses data using LZSS algorithm matching the Panasonic UniPhier spec:
-// 4096-byte ring, initial position 0xFEE, ring pre-filled with 0x00.
-//
-// Spec compliance: the initial zero window (ring offsets 0x000..0xFED) is made available
-// as back-reference targets via a direct zero-count check before the hash chain walk.
-// This avoids the collision issues of embedding virtual positions in the main hash chain.
-//
-// A virtual back-reference to ring offset vMin = max(0, si-18) is valid whenever
-// si < LZSSRingInit (= 4078), because ring position vMin is guaranteed to still hold its
-// initial 0x00 value at that point in decompression.
+// CompressLZSS compresses data using a faithful port of Haruhiko Okumura's
+// classic public-domain LZSS reference encoder (binary-tree match finder), adapted
+// for this format's zero-filled ring buffer instead of the original's space-filled one.
+// This reproduces the exact match/tie-break decisions of the Panasonic firmware
+// toolchain's compressor byte-for-byte (verified against real firmware sub-entries).
 func CompressLZSS(src []byte) []byte {
 	if len(src) == 0 {
 		return []byte{}
 	}
 
 	const (
-		hashSize    = 65536
-		prevSize    = 1 << 16
-		prevMask    = prevSize - 1
-		maxChain    = 128 // Hash chain walk limit
-		maxMatch    = 18  // Maximum LZSS match length
-		windowSize  = 4096
-		ringInitVal = LZSSRingInit // 4078
-		// Slots before ringInitVal in the ring are the pre-filled zero region.
-		// A back-ref to ring offset r (r < ringInitVal) is valid while si ≤ r + (windowSize - ringInitVal).
-		// Equivalently: dist = si + ringInitVal - r ≤ windowSize → r ≥ si - (windowSize - ringInitVal).
-		initSlack = windowSize - ringInitVal // 18: zero-window back-refs available for first 4096 output bytes
+		N         = LZSSRingSize // 4096
+		F         = 18
+		THRESHOLD = 2
+		NIL       = N
 	)
 
-	head := make([]int, hashSize)
-	prev := make([]int, prevSize)
-	for i := range head {
-		head[i] = -1
+	textBuf := make([]byte, N+F-1)
+	lson := make([]int, N+1)
+	rson := make([]int, N+257)
+	dad := make([]int, N+1)
+
+	var matchPosition, matchLength int
+
+	insertNode := func(r int) {
+		cmp := 1
+		key := textBuf[r:]
+		p := N + 1 + int(key[0])
+		rson[r] = NIL
+		lson[r] = NIL
+		matchLength = 0
+		for {
+			if cmp >= 0 {
+				if rson[p] != NIL {
+					p = rson[p]
+				} else {
+					rson[p] = r
+					dad[r] = p
+					return
+				}
+			} else {
+				if lson[p] != NIL {
+					p = lson[p]
+				} else {
+					lson[p] = r
+					dad[r] = p
+					return
+				}
+			}
+			i := 1
+			for ; i < F; i++ {
+				cmp = int(key[i]) - int(textBuf[p+i])
+				if cmp != 0 {
+					break
+				}
+			}
+			if i > matchLength {
+				matchPosition = p
+				matchLength = i
+				if matchLength >= F {
+					break
+				}
+			}
+		}
+		dad[r] = dad[p]
+		lson[r] = lson[p]
+		rson[r] = rson[p]
+		dad[lson[p]] = r
+		dad[rson[p]] = r
+		if rson[dad[p]] == p {
+			rson[dad[p]] = r
+		} else {
+			lson[dad[p]] = r
+		}
+		dad[p] = NIL
+	}
+
+	deleteNode := func(p int) {
+		if dad[p] == NIL {
+			return
+		}
+		var q int
+		if rson[p] == NIL {
+			q = lson[p]
+		} else if lson[p] == NIL {
+			q = rson[p]
+		} else {
+			q = lson[p]
+			if rson[q] != NIL {
+				for rson[q] != NIL {
+					q = rson[q]
+				}
+				rson[dad[q]] = lson[q]
+				dad[lson[q]] = dad[q]
+				lson[q] = lson[p]
+				dad[lson[p]] = q
+			}
+			rson[q] = rson[p]
+			dad[rson[p]] = q
+		}
+		dad[q] = dad[p]
+		if rson[dad[p]] == p {
+			rson[dad[p]] = q
+		} else {
+			lson[dad[p]] = q
+		}
+		dad[p] = NIL
+	}
+
+	for i := N + 1; i <= N+256; i++ {
+		rson[i] = NIL
+	}
+	for i := 0; i < N; i++ {
+		dad[i] = NIL
 	}
 
 	dst := make([]byte, 0, len(src)+len(src)/8+16)
 
-	si := 0
-	srcLen := len(src)
+	getbyte := func(pos int) (byte, bool) {
+		if pos < len(src) {
+			return src[pos], true
+		}
+		return 0, false
+	}
 
-	for si < srcLen {
-		flagPos := len(dst)
-		dst = append(dst, 0)
-		var flags byte
+	codeBuf := make([]byte, 17)
+	codeBufPtr := 1
+	var mask byte = 1
+	codeBuf[0] = 0
 
-		for bit := 0; bit < 8 && si < srcLen; bit++ {
-			// Compute 2-byte hash for current position
-			var hash uint16
-			if si+1 < srcLen {
-				hash = uint16(src[si]) | (uint16(src[si+1]) << 8)
-			} else {
-				hash = uint16(src[si])
+	s := 0
+	r := N - F
+	srcPos := 0
+
+	for i := s; i < r; i++ {
+		textBuf[i] = 0
+	}
+
+	length := 0
+	for ; length < F; length++ {
+		c, ok := getbyte(srcPos)
+		if !ok {
+			break
+		}
+		srcPos++
+		textBuf[r+length] = c
+	}
+	if length == 0 {
+		return []byte{}
+	}
+
+	for i := 1; i <= F; i++ {
+		insertNode(r - i)
+	}
+	insertNode(r)
+
+	for {
+		if matchLength > length {
+			matchLength = length
+		}
+		if matchLength <= THRESHOLD {
+			matchLength = 1
+			codeBuf[0] |= mask
+			codeBuf[codeBufPtr] = textBuf[r]
+			codeBufPtr++
+		} else {
+			codeBuf[codeBufPtr] = byte(matchPosition)
+			codeBufPtr++
+			codeBuf[codeBufPtr] = byte(((matchPosition >> 4) & 0xf0) | (matchLength - (THRESHOLD + 1)))
+			codeBufPtr++
+		}
+		mask <<= 1
+		if mask == 0 {
+			dst = append(dst, codeBuf[:codeBufPtr]...)
+			codeBuf[0] = 0
+			codeBufPtr = 1
+			mask = 1
+		}
+		lastMatchLength := matchLength
+		i := 0
+		for i < lastMatchLength {
+			c, ok := getbyte(srcPos)
+			if !ok {
+				break
 			}
-
-			bestLen := 0
-			bestOff := 0
-
-			maxLen := maxMatch
-			if si+maxLen > srcLen {
-				maxLen = srcLen - si
+			srcPos++
+			deleteNode(s)
+			textBuf[s] = c
+			if s < F-1 {
+				textBuf[s+N] = c
 			}
-
-			// --- Spec compliance: check initial zero window ---
-			// Virtual ring positions 0..ringInitVal-1 are pre-filled with 0x00.
-			// The oldest valid virtual position at source index si is vMin = max(0, si - initSlack).
-			// dist = si + ringInitVal - vMin ≤ windowSize is guaranteed by construction.
-			if src[si] == 0 && si < windowSize {
-				vMin := si - initSlack
-				if vMin < 0 {
-					vMin = 0
-				}
-				// vMin is always < ringInitVal here (since si < windowSize = 4096 and initSlack = 18)
-				zeroLen := 0
-				for zeroLen < maxLen && src[si+zeroLen] == 0 {
-					zeroLen++
-				}
-				if zeroLen >= 3 {
-					bestLen = zeroLen
-					bestOff = vMin // ring offset equals the virtual position directly
-				}
+			s = (s + 1) & (N - 1)
+			r = (r + 1) & (N - 1)
+			insertNode(r)
+			i++
+		}
+		for {
+			old := i
+			i++
+			if !(old < lastMatchLength) {
+				break
 			}
-
-			// --- Hash chain walk for real (previously seen) positions ---
-			pos := head[hash]
-			chain := maxChain
-			for pos >= 0 && chain > 0 {
-				dist := si - pos
-				if dist > windowSize || dist <= 0 {
-					break
-				}
-
-				// Try to extend match — split fast/slow paths to avoid modulo
-				matchLen := 0
-				if dist >= maxLen {
-					// Fast path: match cannot wrap around (common case, no modulo)
-					for matchLen < maxLen && src[pos+matchLen] == src[si+matchLen] {
-						matchLen++
-					}
-				} else {
-					// Slow path: match may exceed distance (repeated patterns)
-					limit := dist
-					if limit > maxLen {
-						limit = maxLen
-					}
-					for matchLen < limit && src[pos+matchLen] == src[si+matchLen] {
-						matchLen++
-					}
-					// If full pattern matched, continue comparing against the repeated pattern
-					if matchLen == dist {
-						for matchLen < maxLen && src[si+matchLen-dist] == src[si+matchLen] {
-							matchLen++
-						}
-					}
-				}
-
-				if matchLen > bestLen {
-					bestLen = matchLen
-					// Compute ring offset: ringPos = ringInitVal + si, so
-					// ring position for source pos = (ringInitVal + pos) & 0xfff
-					bestOff = (ringInitVal + pos) & 0xfff
-					if bestLen == maxMatch {
-						break // Can't do better
-					}
-				}
-
-				pos = prev[pos&prevMask]
-				chain--
-			}
-
-			// Update hash chain for current position
-			prev[si&prevMask] = head[hash]
-			head[hash] = si
-
-			if bestLen >= 3 {
-				// Output back-reference
-				dst = append(dst, byte(bestOff&0xff),
-					byte(((bestOff>>4)&0xf0)|((bestLen-3)&0x0f)))
-
-				// Advance source and update hash chains for skipped positions
-				si++
-				for j := 1; j < bestLen; j++ {
-					if si+1 < srcLen {
-						h := uint16(src[si]) | (uint16(src[si+1]) << 8)
-						prev[si&prevMask] = head[h]
-						head[h] = si
-					}
-					si++
-				}
-			} else {
-				// Output literal byte
-				flags |= 1 << bit
-				dst = append(dst, src[si])
-				si++
+			deleteNode(s)
+			s = (s + 1) & (N - 1)
+			r = (r + 1) & (N - 1)
+			length--
+			if length > 0 {
+				insertNode(r)
 			}
 		}
-
-		dst[flagPos] = flags
+		if length <= 0 {
+			break
+		}
+	}
+	if codeBufPtr > 1 {
+		dst = append(dst, codeBuf[:codeBufPtr]...)
 	}
 
 	return dst

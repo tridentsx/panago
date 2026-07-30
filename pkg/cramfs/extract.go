@@ -3,6 +3,7 @@ package cramfs
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,22 @@ import (
 type Extractor struct {
 	data   []byte
 	config *Config
+
+	// order records each directory's child names in on-disk listing order
+	// (which is NOT alphabetical in Panasonic's images — it reflects the
+	// original build machine's directory order). Keyed by "/"-joined
+	// logical path ("" for root), so it can be serialized as a stable
+	// sidecar and replayed by Builder to reproduce the original layout.
+	order map[string][]string
+}
+
+// orderKey joins a logical directory path and child name using "/" — not
+// filepath.Join, so the sidecar file is portable across OSes.
+func orderKey(base, name string) string {
+	if base == "" {
+		return name
+	}
+	return base + "/" + name
 }
 
 // NewExtractor creates a new cramfs extractor from file
@@ -66,6 +83,8 @@ func (e *Extractor) ExtractAll(outputDir string) error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	e.order = make(map[string][]string)
+
 	// Extract recursively
 	count, err := e.extractDirectory(&root, "", outputDir)
 	if err != nil {
@@ -76,7 +95,28 @@ func (e *Extractor) ExtractAll(outputDir string) error {
 		fmt.Printf("Extracted %d files\n", count)
 	}
 
+	// Save the original (non-alphabetical) directory order as a sidecar so
+	// Builder can reproduce Panasonic's exact on-disk layout on rebuild.
+	if err := e.writeOrderSidecar(outputDir); err != nil {
+		return fmt.Errorf("failed to write order sidecar: %w", err)
+	}
+
 	return nil
+}
+
+// orderSidecarPath returns the sidecar path for a given extraction output
+// directory: a JSON file alongside the directory, named "<dir>_order.json".
+func orderSidecarPath(outputDir string) string {
+	return filepath.Clean(outputDir) + "_order.json"
+}
+
+// writeOrderSidecar serializes the captured directory order to JSON.
+func (e *Extractor) writeOrderSidecar(outputDir string) error {
+	data, err := json.MarshalIndent(e.order, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(orderSidecarPath(outputDir), data, 0644)
 }
 
 // extractDirectory extracts a directory and its contents
@@ -116,12 +156,21 @@ func (e *Extractor) extractDirectory(inode *Inode, basePath, outputDir string) (
 		fullPath := filepath.Join(basePath, name)
 		outPath := filepath.Join(outputDir, fullPath)
 
+		orderPathKey := strings.ReplaceAll(basePath, string(filepath.Separator), "/")
+		e.order[orderPathKey] = append(e.order[orderPathKey], name)
+
 		fileType := entry.Mode & 0xF000
 
 		switch fileType {
 		case S_IFDIR:
-			// Directory
-			if err := os.MkdirAll(outPath, os.FileMode(entry.Mode&0777)|0700); err != nil {
+			// Directory. Create permissively first (0755) so children can
+			// still be written regardless of the original mode, then apply
+			// the real permission bits via Chmod only after recursion
+			// completes. A plain MkdirAll(mode) isn't enough on its own:
+			// mkdir(2) masks the requested mode by the process umask, so an
+			// explicit Chmod is needed to reproduce bits like 0777 exactly
+			// (a typical 022 umask would otherwise leave it at 0755).
+			if err := os.MkdirAll(outPath, 0755); err != nil {
 				return count, err
 			}
 			subCount, err := e.extractDirectory(&entry, fullPath, outputDir)
@@ -129,6 +178,9 @@ func (e *Extractor) extractDirectory(inode *Inode, basePath, outputDir string) (
 				return count, err
 			}
 			count += subCount
+			if err := os.Chmod(outPath, os.FileMode(entry.Mode&0777)); err != nil {
+				return count, err
+			}
 
 		case S_IFREG:
 			// Regular file

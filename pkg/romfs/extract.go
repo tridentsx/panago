@@ -2,6 +2,7 @@ package romfs
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,23 @@ type Extractor struct {
 	data   []byte
 	config *Config
 	super  *Superblock
+
+	// order records each directory's child names in on-disk listing order
+	// (not alphabetical — real mkfs.romfs preserves the original build
+	// machine's order), keyed by "/"-joined logical path ("" for root).
+	order map[string][]string
+}
+
+// volnameSidecarPath returns the sidecar path holding the original volume
+// name, alongside an extraction output directory.
+func volnameSidecarPath(outputDir string) string {
+	return filepath.Clean(outputDir) + "_volname.txt"
+}
+
+// orderSidecarPath returns the sidecar path holding the original directory
+// listing order, alongside an extraction output directory.
+func orderSidecarPath(outputDir string) string {
+	return filepath.Clean(outputDir) + "_order.json"
 }
 
 // NewExtractor creates a new romfs extractor
@@ -122,10 +140,23 @@ func (e *Extractor) walkDirectory(offset uint32, basePath string, files *[]FileI
 			return err
 		}
 
-		// Skip . and .. entries
+		// "." and ".." are real on-disk entries in genromfs images (hardlinks
+		// to self/parent — see processdir() in genromfs.c), and for nested
+		// (non-root) directories they can appear at ANY position in the
+		// listing, not just the start — matching wherever readdir() returned
+		// them on the original build machine. Record their exact position
+		// in the order sidecar so Builder can reproduce it, but don't try
+		// to extract them as real files.
 		if header.Name == "." || header.Name == ".." {
+			if e.order != nil {
+				e.order[basePath] = append(e.order[basePath], header.Name)
+			}
 			offset = header.Next()
 			continue
+		}
+
+		if e.order != nil {
+			e.order[basePath] = append(e.order[basePath], header.Name)
 		}
 
 		path := header.Name
@@ -189,6 +220,7 @@ func (e *Extractor) walkDirectory(offset uint32, basePath string, files *[]FileI
 
 // ExtractAll extracts all files to the given directory
 func (e *Extractor) ExtractAll(outputDir string) error {
+	e.order = make(map[string][]string)
 	files, err := e.ListFiles()
 	if err != nil {
 		return err
@@ -239,6 +271,22 @@ func (e *Extractor) ExtractAll(outputDir string) error {
 				fmt.Printf("Skipping special file: %s (type %d)\n", f.Path, f.FileType)
 			}
 		}
+	}
+
+	// Save the original volume name and directory order as sidecars so
+	// Builder can reproduce the original image exactly on rebuild. The
+	// volume name often embeds a per-build identifier (e.g. a hex
+	// timestamp) that can't be reconstructed any other way, and real
+	// mkfs.romfs does not sort entries alphabetically.
+	if err := os.WriteFile(volnameSidecarPath(outputDir), []byte(e.super.Name), 0644); err != nil {
+		return fmt.Errorf("failed to write volume name sidecar: %w", err)
+	}
+	orderData, err := json.MarshalIndent(e.order, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(orderSidecarPath(outputDir), orderData, 0644); err != nil {
+		return fmt.Errorf("failed to write order sidecar: %w", err)
 	}
 
 	return nil

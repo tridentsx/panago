@@ -150,13 +150,20 @@ func (d *Decoder) extractPartition(data []byte, p PartitionInfo, outputDir strin
 		return fmt.Errorf("partition extends beyond file")
 	}
 
-	partData := make([]byte, p.Size)
-	copy(partData, data[p.Offset:p.Offset+p.Size])
-
 	// Handle MAIN partition specially (contains sub-entries)
 	if p.Name == "MAIN" {
-		return d.extractMainPartition(partData, outputDir)
+		// MAIN's declared partition size is itself sometimes short by a few
+		// dozen bytes (like the cramfs superblock's bogus size field) —
+		// real firmware has been observed where the last sub-entry's data
+		// extends slightly past p.Size, into padding before the next
+		// partition. Hand extractMainPartition the rest of the buffer so
+		// its own entry-list-driven bounds (not this declared size) decide
+		// where the data actually ends.
+		return d.extractMainPartition(data[p.Offset:], outputDir)
 	}
+
+	partData := make([]byte, p.Size)
+	copy(partData, data[p.Offset:p.Offset+p.Size])
 
 	// For other partitions, Feistel decrypt the entire partition
 	d.feistel.Decrypt(partData)
@@ -229,7 +236,8 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 	var entrySignature []byte
 	var compType uint16
 	var chunkSize uint32
-	var bufferConstant uint32
+	var bufferConstants []uint32
+	var decompSizes []uint32
 	var checksumFlag uint8
 	processedEntries := 0
 
@@ -268,19 +276,26 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 			continue
 		}
 
-		// Capture structural constants from first entry
+		// Capture structural constants that ARE uniform across entries
+		// from the first one; entry-signature/comp-type/checksum-flag are
+		// shared, but decompSize/BufferConstant are not (the last entry is
+		// typically a smaller partial chunk with its own smaller
+		// BufferConstant — see bufferConstants below).
 		if processedEntries == 0 {
 			entrySignature = make([]byte, 14)
 			copy(entrySignature, entryData[:14])
 			compType = ehdr.CompType
 			chunkSize = ehdr.DecompSize
 			checksumFlag = entryData[44]
-
-			// Derive buffer constant: Slack + FooterOffset
-			slack := binary.LittleEndian.Uint32(entryData[28:32])
-			footerOff := binary.LittleEndian.Uint32(entryData[32:36])
-			bufferConstant = slack + footerOff
 		}
+
+		// BufferConstant = Slack + FooterOffset, captured per-entry (paired
+		// with its decompressed size): it scales with the entry's own
+		// decompressed size, not a single constant shared by every entry.
+		slack := binary.LittleEndian.Uint32(entryData[28:32])
+		footerOff := binary.LittleEndian.Uint32(entryData[32:36])
+		bufferConstants = append(bufferConstants, slack+footerOff)
+		decompSizes = append(decompSizes, ehdr.DecompSize)
 
 		// Use only compSize bytes for decompression (not the full entry)
 		compData := entryData[MainEntryHeaderLen : MainEntryHeaderLen+int(ehdr.CompSize)]
@@ -325,7 +340,8 @@ func (d *Decoder) extractMainPartition(data []byte, outputDir string) error {
 		EntrySignature: hex.EncodeToString(entrySignature),
 		CompType:       compType,
 		ChunkSize:      chunkSize,
-		BufferConstant: bufferConstant,
+		BufferConstants: bufferConstants,
+		DecompSizes:     decompSizes,
 		ChecksumFlag:   checksumFlag,
 		EntryCount:     processedEntries,
 	}

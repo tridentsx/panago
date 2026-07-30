@@ -101,6 +101,72 @@ func SplitMainBin(mainPath, outputDir string) ([]MainPartition, error) {
 	return partitions, nil
 }
 
+// GetTemplatePartitionSizes decodes a template firmware and returns each
+// MAIN sub-partition's total on-disk size (fma4..fma7), keyed by name.
+//
+// The real firmware allocates each sub-partition a FIXED size (matching the
+// actual NAND flash partition table) that's larger than its real content —
+// e.g. fma6 (romfs) is allocated exactly 18 MiB, fma7 (cramfs) exactly
+// 113.75 MiB, regardless of how much of that space the filesystem actually
+// uses. Rebuilding a byte-identical firmware requires padding each rebuilt
+// sub-image back out to that same fixed size, which this looks up from the
+// template rather than hardcoding (so it stays correct across firmware
+// versions/models with different partition tables).
+func GetTemplatePartitionSizes(templatePath string) (map[string]int64, error) {
+	tempDir, err := os.MkdirTemp("", "panago-template-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tempDir)
+
+	decoder := NewDecoder(false)
+	if err := decoder.DecodeFile(templatePath, tempDir); err != nil {
+		return nil, fmt.Errorf("failed to decode template: %w", err)
+	}
+
+	mainPath := filepath.Join(tempDir, "MAIN.bin")
+	parts, err := SplitMainBin(mainPath, tempDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to split template MAIN.bin: %w", err)
+	}
+
+	sizes := make(map[string]int64, len(parts))
+	for _, p := range parts {
+		sizes[p.Name] = p.Size
+	}
+	return sizes, nil
+}
+
+// PadPartitionToSize reproduces the real firmware's reserved-space
+// convention for a rebuilt sub-partition: zero-pad the real content up to
+// alignBoundary (confirmed against real firmware: cramfs uses its own
+// BLOCK_SIZE of 4096; romfs uses 1024, matching genromfs's own dumpall()
+// end-of-image alignment), then fill the remaining reserved space up to
+// targetSize with 0xFF (the conventional "erased flash" byte value).
+//
+// Returns an error if the real content (after alignment) already exceeds
+// targetSize — meaning the modified content no longer fits in the
+// original NAND partition allocation.
+func PadPartitionToSize(data []byte, alignBoundary int, targetSize int64) ([]byte, error) {
+	if rem := len(data) % alignBoundary; rem != 0 {
+		data = append(data, make([]byte, alignBoundary-rem)...)
+	}
+
+	if int64(len(data)) > targetSize {
+		return nil, fmt.Errorf("content is %d bytes after alignment, exceeds the %d-byte partition allocation", len(data), targetSize)
+	}
+
+	if int64(len(data)) < targetSize {
+		pad := make([]byte, targetSize-int64(len(data)))
+		for i := range pad {
+			pad[i] = 0xFF
+		}
+		data = append(data, pad...)
+	}
+
+	return data, nil
+}
+
 // CombineMainBin combines fma4, fma5, fma6, fma7 back into MAIN.bin
 // Partitions are concatenated directly - they should already include any needed padding.
 func CombineMainBin(inputDir, outputPath string) error {

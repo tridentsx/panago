@@ -210,10 +210,10 @@ func TestMainMetadataCreated(t *testing.T) {
 	if meta.EntrySignature == "" {
 		t.Error("entry_signature is empty")
 	}
-	if meta.BufferConstant == 0 {
-		t.Error("buffer_constant is 0")
+	if len(meta.BufferConstants) == 0 || meta.BufferConstants[0] == 0 {
+		t.Error("buffer_constants is empty or zero")
 	}
 
-	t.Logf("Metadata: %d entries, chunk=%d, comp_type=%d, buffer_const=%d",
-		meta.EntryCount, meta.ChunkSize, meta.CompType, meta.BufferConstant)
+	t.Logf("Metadata: %d entries, chunk=%d, comp_type=%d, buffer_constants=%v",
+		meta.EntryCount, meta.ChunkSize, meta.CompType, meta.BufferConstants)
 }

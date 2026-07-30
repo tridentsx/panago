@@ -107,6 +107,9 @@ DRV1     V304        182677504      1122688
 BUCD     000         183803904       389120
 ```
 
+Note: MAIN's declared size here is itself a few dozen bytes short of the
+true partition boundary — see [Fields That Lie](#fields-that-lie-declared-sizes-vs-true-boundaries) below.
+
 #### Extract Firmware Partitions
 
 ```bash
@@ -142,8 +145,13 @@ Splitting MAIN.bin...
   fma4: offset=0x0, size=6553600 (raw)
   fma5: offset=0x640000, size=47710208 (cramfs)
   fma6: offset=0x33c0000, size=18874368 (romfs)
-  fma7: offset=0x45c0000, size=111411200 (cramfs)
+  fma7: offset=0x45c0000, size=119275520 (cramfs)
 ```
+
+These sizes are the real, fixed NAND partition allocations — each notably
+larger than the filesystem's actual content (e.g. fma7 is 113.75 MiB
+allocated vs. ~113.6 MB actually used). See
+[Byte-Exact Reproduction](#byte-exact-reproduction) below.
 
 Sub-images:
 - `fma4.bin` - Kernel (raw binary)
@@ -331,10 +339,12 @@ The MAIN partition contains a sub-entry list with individually compressed chunks
 MAIN partition
 └── 0x00: First header (48 bytes, Feistel encrypted)
 └── 0x30: List header (20 bytes, plaintext)
-          [0:4]   Checksum      (sum of LE uint32 words from bytes [4:])
+          [0:4]   Checksum      (Adler32 of bytes [4:] — list header tail + entry records)
           [4:8]   FormatVersion (always 1)
           [8:12]  ListSize      (total list header + entry records size)
-          [12:16] DecompSize    (total decompressed size)
+          [12:16] DecompSize    (PER-CHUNK decompressed size, e.g. 0x1000000 = 16MB —
+                                  NOT the total; every chunk but the last is exactly
+                                  this size, the last is whatever remains)
           [16:20] CompType      (2 = LZSS, 0 = uncompressed)
 └── Entry records (8 bytes each):
           [0:4]   Size      (entry blob size)
@@ -343,7 +353,7 @@ MAIN partition
     Each entry:
           [0:14]  Signature     (e.g. "EXTRHEADDRVD  ")
           [14:16] CompType      (2 = raw LZSS)
-          [16:20] DecompSize    (uncompressed chunk size)
+          [16:20] DecompSize    (this entry's own decompressed size)
           [20:24] DestAddr      (load address, 0)
           [24:28] CompSize      (compressed data size)
           [28:32] Slack         (BufferConstant - FooterOffset)
@@ -355,23 +365,47 @@ MAIN partition
           [FooterOffset:] "EXTRFOOT" (8 bytes)
 ```
 
+`BufferConstant` is **not** the same for every entry — it scales with that
+entry's own `DecompSize`. In every real firmware examined, all full
+(chunk-size) entries share one value, but the last (partial-size) entry uses
+a proportionally smaller one. `panago` captures each entry's real
+`BufferConstant` alongside its `DecompSize` during extraction and looks it up
+by size when re-encoding, rather than assuming one constant fits all — this
+matters as soon as modding changes which chunk sizes exist. The exact
+formula relating `DecompSize` to `BufferConstant` isn't confirmed (only two
+real data points exist so far); for a genuinely new chunk size not seen in
+the source firmware, panago falls back to a deliberately generous estimate
+and prints a warning. A second real firmware with a different total content
+size (different last-chunk size) would supply a third data point and might
+be enough to pin down the real formula — see `pkg/firmware/encode_main.go`'s
+`estimateBufferConstant`.
+
 ### LZSS Compression
 
-The MAIN sub-entries use a variant of the classic Haruhiko Okumura LZSS algorithm:
+The MAIN sub-entries use Haruhiko Okumura's classic public-domain LZSS
+reference encoder (the binary-tree-based match finder, not a hash-chain
+heuristic), adapted only in that the ring buffer is zero-filled instead of
+space-filled. `pkg/firmware/lzss.go`'s `CompressLZSS` is a direct port of
+that reference algorithm and reproduces the original firmware's compressed
+bytes exactly (verified against every MAIN sub-entry in a real firmware
+image, including the odd-sized last chunk):
 
 - 4096-byte ring buffer, initialized to `0x00`
 - Initial write position: `0xFEE` (4078)
 - Offsets: 12 bits; lengths: 4 bits with bias +3 (range 3–18 bytes)
 - Flag byte precedes each group of 8 tokens: `1` = literal, `0` = back-reference
-- Back-references to the pre-filled zero window (offsets `0x000`–`0xFED`) are valid
-  for the first 4096 output bytes — the compressor supports this via a direct zero-count
-  check before the hash chain walk
+- Back-references into the pre-filled zero window (offsets `0x000`–`0xFED`) are valid
+  for the first 4096 output bytes, via the reference encoder's normal tree search —
+  no special-casing needed once the exact algorithm is used
 
 ### Checksum Summary
 
+Every checksum in this format is Adler32 — there is no plain word-sum
+anywhere, despite what field names might suggest.
+
 | Location | Algorithm |
 |---|---|
-| File header checksum (list header `[0:4]`) | Sum of LE uint32 words from bytes `[4:]` of list header + entry records |
+| List header checksum (`list_header[0:4]`) | Adler32 of list header bytes `[4:]` + all entry records |
 | List entry checksum (`entry_record[4:8]`) | Adler32 of Feistel-encrypted entry blob |
 | Entry header checksum (`entry_hdr[40:44]`) | Adler32 of every 16th byte of decompressed chunk data |
 | Module entry DataCk (`mod_entry[36:40]`) | Adler32 of Feistel-decrypted partition data (non-MAIN only) |
@@ -381,8 +415,102 @@ The MAIN sub-entries use a variant of the classic Haruhiko Okumura LZSS algorith
 
 Panasonic uses "old cramfs format" (flags=0, no `FSID_VERSION_2`):
 - 4 KB block size
-- zlib compression with raw deflate (`wbits=-14`)
+- Real zlib (not Go's `compress/flate`, which is a different DEFLATE
+  implementation and cannot reproduce these exact bytes) at
+  `level=6, windowBits=14, memLevel=7, Z_DEFAULT_STRATEGY`, producing a
+  standard zlib-wrapped stream (2-byte header + Adler32 trailer) — **not**
+  raw deflate. `pkg/cramfs/zdeflate.go` is a pure-Go port of zlib 1.2.12's
+  `deflate_slow` + Huffman encoder at exactly these parameters.
 - Symlinks stored as compressed data (same as regular files)
+- Superblock UID/GID are a fixed placeholder (`41605`/`100`) on every inode,
+  not real ownership; the "total size" field is also a fixed placeholder
+  (`0x00010000`), not the real image size
+- Directory listing order is the original build machine's `readdir()` order,
+  not alphabetical — `panago` captures this at extraction time (a sidecar
+  `<dir>_order.json`) and replays it on rebuild
+- Layout is two full passes over the tree, not one: every directory's own
+  listing is written first (a complete depth-first pass touching every
+  directory, no file data at all), *then* a second full pass writes every
+  file's/symlink's data — so a directory many levels deep can appear at a
+  tiny offset while a shallow sibling's data lands near the end of the image
+- Identical file/symlink content is stored once and shared across the whole
+  image (not just within one directory) — common for `libfoo.so` /
+  `libfoo.so.N`-style duplicate symlinks
+
+### Romfs Format
+
+Panasonic's romfs partition (fma6) is standard Linux romfs — confirmed
+against the actual kernel source in Panasonic's own GPL disclosure
+(`fs/romfs/*` is unmodified upstream) — built with
+[`genromfs`](https://github.com/chexum/genromfs), not a custom tool. Notable
+behavior that isn't obvious from the on-disk format alone (see
+`pkg/romfs/build.go`):
+
+- Only the **root** directory gets explicit `.`/`..` entries synthesized as
+  a special case; `.` is a real directory entry (self-referencing), `..` is
+  a hard link (type 0) to `.`, both always first.
+- Every **other** directory's `.`/`..` are ordinary hard-link entries — `.`
+  points to that directory's own header offset, `..` to the parent
+  directory's header offset — and they appear at whatever position
+  `readdir()` returned them on the original build machine, not necessarily
+  first. `panago` captures their exact position per directory (same order
+  sidecar as cramfs) and replays them as hard links at that position.
+- Directory entries carry the executable bit (traversable), including the
+  root `.` entry; `..` never does.
+- A directory's own recursive content is written immediately inline (unlike
+  cramfs's two-pass layout) — a large early subdirectory pushes every later
+  sibling's offset out by its full size.
+- The header checksum covers the 16-byte header **plus the name padded to
+  16 bytes** — not just the header, despite `romfs.txt` header diagrams
+  suggesting otherwise.
+
+### Fields That Lie: Declared Sizes vs. True Boundaries
+
+Several "size" fields throughout this format are placeholders or are
+otherwise short of the real physical boundary, rather than authoritative:
+
+- The MAIN module-table entry's declared size can be dozens of bytes short
+  of where MAIN's data actually ends (there's slack before the next
+  partition starts). Both `firmware decode` and `firmware encode` treat the
+  declared size as a lower bound, not a hard limit — they read/write up to
+  the next partition's real offset, and only error if content would
+  overflow *that* true boundary.
+- The cramfs superblock's "total size" field is a fixed placeholder
+  (`0x00010000`) on every real image, unrelated to the actual image size.
+- The romfs superblock's declared size is the real content size *before*
+  its own trailing 1024-byte alignment pad — the on-disk file is a few dozen
+  bytes larger than the field says.
+- Each filesystem partition (fma5/fma6/fma7) is allocated a fixed size in
+  the firmware — matching the real NAND partition table, not the actual
+  filesystem content — padded with a small zero-aligned gap (4096-byte
+  boundary for cramfs, matching its own `BLOCK_SIZE`; 1024-byte for romfs,
+  matching `genromfs`'s own end-of-image padding) followed by `0xFF` fill
+  (the conventional erased-flash byte) out to the fixed allocation.
+
+## Byte-Exact Reproduction
+
+`panago-cli extract` followed immediately by `panago-cli build` (no
+modifications) now reproduces the original firmware **exactly**, verified
+by SHA-256 match against a real `PANAEUSB.FRM`. This required all of the
+above — reproducing not just each filesystem's logical content, but every
+placeholder field, padding convention, and reserved NAND allocation the
+original firmware happened to contain. In particular:
+
+- **`firmware build`** derives each sub-partition's true fixed size from the
+  *template* firmware (via `firmware.GetTemplatePartitionSizes`), not a
+  hardcoded constant — so it stays correct across firmware versions/models
+  with different partition tables — and pads the freshly rebuilt cramfs/romfs
+  images out to that size (see `firmware.PadPartitionToSize`).
+- Modifying content and rebuilding works the same way: as long as the
+  modified filesystem still fits within the original's fixed partition
+  allocation, the rebuilt firmware keeps the exact same MAIN chunk layout as
+  the original (same chunk count, same chunk boundaries), which is also why
+  `BufferConstant` lookups almost always find an exact match even for
+  modified content — see the MAIN Partition Structure section above.
+- If modified content no longer fits — either the filesystem itself exceeds
+  its fixed NAND allocation, or the LZSS-compressed MAIN data would exceed
+  the true space before the next partition — `build` fails with a clear
+  error rather than silently truncating or corrupting output.
 
 ---
 

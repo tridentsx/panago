@@ -99,10 +99,23 @@ func (e *Encoder) EncodeFile(inputDir, outputPath, templatePath string) error {
 					continue
 				}
 
-				if len(encodedData) > int(p.Size) {
-					fmt.Printf("Warning: encoded MAIN is larger than original (%d > %d), truncating\n",
-						len(encodedData), p.Size)
-					encodedData = encodedData[:p.Size]
+				// MAIN's declared partition size is itself sometimes short
+				// by a few dozen bytes (the same "declared sizes lie"
+				// quirk as the cramfs superblock and the decode-side
+				// extractPartition fix) — real firmware's own encoded MAIN
+				// data can legitimately exceed p.Size, using slack space up
+				// to wherever the next partition actually starts. Only
+				// truncating/erroring beyond that TRUE physical boundary
+				// avoids silently corrupting real compressed data.
+				trueLimit := int64(len(output)) - int64(p.Offset)
+				for _, other := range partitions {
+					if other.Offset > p.Offset && int64(other.Offset-p.Offset) < trueLimit {
+						trueLimit = int64(other.Offset - p.Offset)
+					}
+				}
+
+				if int64(len(encodedData)) > trueLimit {
+					return fmt.Errorf("encoded MAIN (%d bytes) exceeds the space available before the next partition (%d bytes) — modified content no longer fits in the original firmware layout", len(encodedData), trueLimit)
 				} else if len(encodedData) < int(p.Size) {
 					// Pad with 0xFF
 					if e.verbose {

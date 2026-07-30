@@ -94,10 +94,19 @@ type MainPartitionMetadata struct {
 	ListHeaderCompType uint32 `json:"list_header_comp_type"` // MainListHeader.CompType: 0=uncompressed, 2=LZSS
 	EntrySignature string `json:"entry_signature"`  // Hex-encoded 14-byte entry signature
 	CompType       uint16 `json:"comp_type"`        // Compression type for all entries (observed: 2)
-	ChunkSize      uint32 `json:"chunk_size"`       // Decompressed chunk size (observed: 0x1000000 = 16MB)
-	BufferConstant uint32 `json:"buffer_constant"`  // Slack+FooterOff constant (observed: 18846664)
-	ChecksumFlag   uint8  `json:"checksum_flag"`    // Entry header checksum flag (observed: 0x10)
-	EntryCount     int    `json:"entry_count"`      // Number of sub-entries
+	ChunkSize      uint32 `json:"chunk_size"`       // Decompressed chunk size for full chunks (observed: 0x1000000 = 16MB)
+	// BufferConstant is NOT uniform across entries — it scales with each
+	// entry's own decompressed size (confirmed against real firmware: the
+	// last, smaller-than-chunkSize entry uses a proportionally smaller
+	// BufferConstant than the full-size entries). Captured per-entry, paired
+	// with DecompSizes, so re-encoding can look up the right BufferConstant
+	// by actual decompressed size rather than assuming entry i always means
+	// the same thing (which breaks the moment modified content needs a
+	// different number/size of chunks than the original).
+	BufferConstants []uint32 `json:"buffer_constants"`
+	DecompSizes     []uint32 `json:"decomp_sizes"` // DecompSizes[i] is entry i's real decompressed size
+	ChecksumFlag    uint8    `json:"checksum_flag"` // Entry header checksum flag (observed: 0x10)
+	EntryCount      int      `json:"entry_count"`   // Number of sub-entries
 }
 
 // FirmwareInfo contains metadata about a firmware file
